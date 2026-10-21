@@ -1,0 +1,38 @@
+Mantella - Anthropic API v1.0
+
+Unofficial modification to Mantella, dated 2026-10-21: adds Anthropic (Official) as an
+LLM service. Not endorsed by the Mantella authors or by Anthropic.
+
+LICENSES
+Backend patch source, setup_backend.py and frozen_patch.py are distributed under
+GNU AGPL version 3 or later. See LICENSE and Licenses/Mantella-Backend-AGPL-3.0.txt.
+Original upstream terms and notices apply. frozen_patch.py comes from Mantella Dual Input
+(https://github.com/Abhisek571/Mantella-Dual-Input), same author, same license.
+
+UPSTREAM SOURCE
+Backend baseline: Mantella v0.14
+https://github.com/art-from-the-machine/Mantella/tree/v0.14
+Source/upstream holds the unmodified v0.14 files for the five changed modules:
+src/utils.py, src/llm/client_base.py, src/config/definitions/llm_definitions.py,
+src/config/definitions/vision_definitions.py, src/config/definitions/action_definitions.py.
+Source/backend/src holds the modified versions.
+
+BUILDING
+Run setup_backend.py using CPython 3.11 against a supported Mantella.exe; see INSTALL.txt.
+No third-party Python packages are needed. Source/backend/build-contract.json records the
+supported input executables, the source hashes and the expected output hashes.
+
+No Mantella executable, bundled runtime or voice assets are redistributed here. Obtain
+them from the original Mantella installation. Setup creates a copy and does not alter the
+original or user configuration. The hash guards establish release compatibility, not
+restrictions on license rights: developers may change the source and build contract for
+their own builds. Redistributing the resulting full executable requires reviewing its
+bundled components and satisfying their source and notice requirements separately.
+Retain applicable AGPL notices and source access when serving remote users.
+
+CREDITS
+Mantella authors and contributors.
+Original mod: https://www.nexusmods.com/skyrimspecialedition/mods/98631
+Documentation: https://art-from-the-machine.github.io/Mantella/index.html
+
+Distributed without warranty; see the license texts.

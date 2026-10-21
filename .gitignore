@@ -1,0 +1,7 @@
+*SECRET_KEY*.txt
+secret_keys.json
+__pycache__/
+SKSE/
+release/
+nexus_page.txt
+description_bbcode.txt

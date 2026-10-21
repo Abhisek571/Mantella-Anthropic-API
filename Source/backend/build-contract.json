@@ -1,0 +1,19 @@
+{
+  "bases": {
+    "b103fb5cbdfd9b3cb7bb1c157ad67bca1a1d8fcd554e76f2bd0ca5947d0757b1": {
+      "name": "Mantella 0.14",
+      "patched_sha256": "b614ed47f1a6429c809b5a6efe6666388e8037a3c9504255f2c3ef8779edeee2"
+    },
+    "b05a23b4e71d1115e8e7a57cc5fc6a8279a0d70e859ca9688429dca8c118b7ac": {
+      "name": "Mantella Dual Input 1.1",
+      "patched_sha256": "869ede6ee3ff2ccaf28470b849a0a18426831b67205270791694a25b107e9afa"
+    }
+  },
+  "modules": {
+    "src.utils": "5aca007bce1bf2b643d71ad8dc25e27a27640d1ef762d0c0e46379b8a843c7af",
+    "src.llm.client_base": "a9a331e0369c085bc7619e2807b49afb910f2c58b89d4085ccd690a4b95ac131",
+    "src.config.definitions.llm_definitions": "0006db30108991a8ec6e6657fd8c524d8004447e61ef498e2dcae22497d24054",
+    "src.config.definitions.vision_definitions": "dc4442abd6a0b9044daaaabfc08eaa0a13114598f5f2b69eace27bd460d2e060",
+    "src.config.definitions.action_definitions": "fa9bc2fac7442292f50d476ade6495ec9739a6eb9e734db19e68c8722de1f136"
+  }
+}
