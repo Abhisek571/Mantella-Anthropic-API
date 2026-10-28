@@ -1,4 +1,4 @@
-Mantella - Anthropic API v1.0
+Mantella - Direct AI Connect v1.0
 
 Unofficial modification to Mantella, dated 2026-10-21: adds Anthropic (Official) as an
 LLM service. Not endorsed by the Mantella authors or by Anthropic.
@@ -6,20 +6,37 @@ LLM service. Not endorsed by the Mantella authors or by Anthropic.
 LICENSES
 Backend patch source, setup_backend.py and frozen_patch.py are distributed under
 GNU AGPL version 3 or later. See LICENSE and Licenses/Mantella-Backend-AGPL-3.0.txt.
-Original upstream terms and notices apply. frozen_patch.py comes from Mantella Dual Input
+Original upstream terms and notices apply. frozen_patch.py and the Dual Input backend changes
+(src/dual_input.py, src/conversation/conversation.py, src/game_manager.py,
+src/http/communication_constants.py) come from Mantella Dual Input 1.1
 (https://github.com/Abhisek571/Mantella-Dual-Input), same author, same license.
+The game scripts in Scripts/ (MantellaConversation, MantellaRepository, MantellaMCM,
+MantellaMCM_GeneralSettings) are Mantella Dual Input 1.1's, unchanged; they keep Mantella's
+MIT license. See Licenses/Mantella-Game-LICENSE.txt.
+
+BUNDLED THIRD-PARTY PACKAGES
+Source/backend/vendor holds two unmodified pure-Python packages that setup adds to the
+patched executable:
+- Anthropic Python SDK 0.125.0 (https://github.com/anthropics/anthropic-sdk-python),
+  MIT License, Copyright 2023 Anthropic, PBC. See Source/backend/vendor/licenses/anthropic-LICENSE.
+- docstring_parser 0.18.0 (https://github.com/rr-/docstring_parser), MIT License,
+  Copyright (c) 2018 Marcin Kurczewski. See Source/backend/vendor/licenses/docstring_parser-LICENSE.md.
+src/llm/anthropic_native.py is new in this patch (no upstream counterpart).
 
 UPSTREAM SOURCE
 Backend baseline: Mantella v0.14
 https://github.com/art-from-the-machine/Mantella/tree/v0.14
-Source/upstream holds the unmodified v0.14 files for the five changed modules:
-src/utils.py, src/llm/client_base.py, src/config/definitions/llm_definitions.py,
-src/config/definitions/vision_definitions.py, src/config/definitions/action_definitions.py.
+Source/upstream holds the unmodified v0.14 file for every changed module (see MODULES in
+setup_backend.py): src/utils.py, src/llm/client_base.py, src/config/definitions/llm_definitions.py,
+src/config/definitions/vision_definitions.py, src/config/definitions/action_definitions.py,
+src/http/routes/mantella_route.py, src/remember/summaries.py, src/ui/start_ui.py,
+src/conversation/conversation.py, src/game_manager.py, src/http/communication_constants.py.
 Source/backend/src holds the modified versions.
 
 BUILDING
 Run setup_backend.py using CPython 3.11 against a supported Mantella.exe; see INSTALL.txt.
-No third-party Python packages are needed. Source/backend/build-contract.json records the
+No Python packages need to be installed; the two above are read from Source/backend/vendor.
+Source/backend/build-contract.json records the
 supported input executables, the source hashes and the expected output hashes.
 
 No Mantella executable, bundled runtime or voice assets are redistributed here. Obtain

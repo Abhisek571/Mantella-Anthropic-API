@@ -17,6 +17,7 @@ import src.utils as utils
 from src.telemetry.telemetry import create_span_from_thread
 from src.actions.function_manager import FunctionManager
 from src.llm.claude_cache_connector import ClaudeCacheConnector
+import src.extensions as src_extensions
 
 logger = utils.get_logger()
 
@@ -35,6 +36,8 @@ class ClientBase(AIClient):
     token counting, endpoint resolution, and model list retrieval
     '''
     api_token_limits = {}
+    # Extra attempts when a streamed reply comes back with no text and no tool call
+    EMPTY_REPLY_RETRIES = 2
     tiktoken_cache_dir = "data"
     os.environ["TIKTOKEN_CACHE_DIR"] = tiktoken_cache_dir
 
@@ -50,6 +53,9 @@ class ClientBase(AIClient):
         super().__init__()
         self._generation_lock: Lock = Lock()
         self._base_url = self._get_endpoint(api_url)
+        # Anthropic (Native, cached) talks to the Messages API through the Anthropic SDK instead of the OpenAI client
+        self._is_native: bool = self._base_url == utils.ANTHROPIC_NATIVE_ENDPOINT
+        self._thinking_by_tool_call: dict[str, list[dict]] = {}
         self._model_name: str = ClientBase._anthropic_model_id(self._base_url, llm)
         self._startup_async_client: AsyncOpenAI | None = None
         self._request_params: dict[str, Any] | None = ClientBase._strip_unsupported_anthropic_params(self._base_url, llm_params)
@@ -166,6 +172,36 @@ class ClientBase(AIClient):
         return OpenAI(api_key=self._api_key, base_url=self._base_url, default_headers=self._header)
 
 
+    def generate_native_client(self, is_async: bool):
+        """Anthropic SDK client for Anthropic (Native, cached). Close it after every call, like the OpenAI clients."""
+        import anthropic
+        if is_async:
+            return anthropic.AsyncAnthropic(api_key=self._api_key)
+        return anthropic.Anthropic(api_key=self._api_key)
+
+
+    @utils.time_it
+    def _native_request_call(self, messages: Message | message_thread) -> str | None:
+        """One-shot (non-streamed) request through the Messages API, used for summaries"""
+        from src.llm import anthropic_native
+        with self._generation_lock:
+            logger.log(28, 'Getting LLM response...')
+            if isinstance(messages, Message) or isinstance(messages, ImageMessage):
+                openai_messages = [messages.get_openai_message()]
+            else:
+                openai_messages = messages.get_openai_messages()
+            # one-off prompts are not reused, so caching them would only add the cache-write cost
+            request = anthropic_native.build_request(self.model_name, openai_messages, self._request_params, None, {}, cache=False)
+            client = self.generate_native_client(is_async=False)
+            try:
+                return anthropic_native.reply_text(client.messages.create(**request)) or None
+            except Exception as e:
+                logger.error(f"Anthropic (Native) request failed: {e}")
+                return None
+            finally:
+                client.close()
+
+
     @utils.time_it
     def _request_call_full(self, messages: Message | message_thread) -> ChatCompletion | None:
         """Returns the full chat completion object
@@ -223,6 +259,11 @@ class ClientBase(AIClient):
         Returns:
             The LLM response message content or None if the request failed
         """
+        if self._is_native:
+            reply = self._native_request_call(messages)
+            if not reply:
+                logger.info(f"LLM Response failed")
+            return reply
         chat_completion: ChatCompletion = self._request_call_full(messages)
         
         if (
@@ -250,6 +291,7 @@ class ClientBase(AIClient):
                     request_params: dict[str, Any] = {}
                 if is_multi_npc: # override max_tokens to be at least 250 in radiant / multi-NPC conversations
                     request_params["max_tokens"] = max(self.max_tokens_param, 250)
+                async_client = None
                 try:
                     # Prepare the messages including the image if provided
                     vision_hints = ''
@@ -272,6 +314,17 @@ class ClientBase(AIClient):
                             logger.warning("Vision tool called but Vision not enabled in config - ignoring")
                         self._enable_vision_next_call = False  # Reset flag after use
 
+                    # Extensions (none installed = no change): trim the actions, add text after the cache point
+                    extensions = src_extensions.registry()
+                    ext_ctx = {'model': self.model_name, 'is_multi_npc': is_multi_npc, 'messages': openai_messages}
+                    if tools:
+                        tools = extensions.filter('filter_tools', tools, ext_ctx)
+                    extra_texts = extensions.collect('extra_user_text', ext_ctx)
+                    if extra_texts and not self._is_native:
+                        openai_messages = self._with_extra_text(openai_messages, extra_texts)
+                    if not self._is_native and extensions.has('system_parts'):
+                        openai_messages = self._with_system_parts(openai_messages, lambda parts: extensions.filter('system_parts', parts, ext_ctx))
+
                     # Handle tool calling: use dedicated function client if available, otherwise use main LLM
                     if tools:
                         if self._function_client:
@@ -283,66 +336,119 @@ class ClientBase(AIClient):
                             request_params["tools"] = tools
                     
                     # Apply Claude cache breakpoint after all message transformations
-                    if self._caching_enabled and self._claude_cache.is_applicable(self._base_url, self._model_name):
+                    if not self._is_native and self._caching_enabled and self._claude_cache.is_applicable(self._base_url, self._model_name):
                         try:
                             openai_messages = self._claude_cache.transform_messages(openai_messages)
                         except Exception as e:
                             logger.debug(f"Claude caching transform failed: {e}")
 
-                    # Create async client for main LLM streaming (after function client has run if applicable)
-                    if self._startup_async_client:
-                        async_client = self._startup_async_client
-                        self._startup_async_client = None # do not reuse the same client
-                    else:
-                        async_client = self.generate_async_client()
-                    
-                    # Dict to track partial tool calls by index
-                    accumulated_tool_calls = {}
-                    
-                    async for chunk in await async_client.chat.completions.create(
-                        model=self.model_name, 
-                        messages=openai_messages, 
-                        stream=True,
-                        **request_params,
-                    ):
+                    native_request = None
+                    if self._is_native:
+                        from src.llm import anthropic_native
+                        system_parts = (lambda parts: extensions.filter('system_parts', parts, ext_ctx)) if extensions.has('system_parts') else None
+                        native_request = anthropic_native.build_request(self.model_name, openai_messages, request_params,
+                                                                        request_params.get("tools"), self._thinking_by_tool_call, cache=True,
+                                                                        extra_texts=extra_texts, system_parts=system_parts)
+
+                    # A stream that ends with no text and no tool call would leave the NPC silent.
+                    # Nothing has been yielded yet in that case, so ask again before giving up.
+                    for attempt in range(1 + self.EMPTY_REPLY_RETRIES):
+                        if native_request is not None:
+                            state = anthropic_native.StreamState()
+                            async_client = self.generate_native_client(is_async=True)
+                            try:
+                                async for text in anthropic_native.stream_reply(async_client, native_request, self._thinking_by_tool_call, state):
+                                    yield ("content", text)
+                            finally:
+                                await async_client.close()
+                                async_client = None
+                            if state.usage:
+                                extensions.record_usage({'time': time.time(), 'model': self.model_name, **state.usage,
+                                                         'cost': anthropic_native.reply_cost(self.model_name, state.usage)})
+                            if state.tool_calls:
+                                yield ("tool_calls", list(state.tool_calls))
+                            if state.got_text or state.tool_calls:
+                                if attempt > 0:
+                                    logger.log(23, f"Empty-reply safety net: retry {attempt} succeeded")
+                                break
+                            if attempt < self.EMPTY_REPLY_RETRIES:
+                                logger.warning(f"Empty-reply safety net: the LLM returned nothing (stop_reason={state.stop_reason}), retrying ({attempt + 1}/{self.EMPTY_REPLY_RETRIES})...")
+                            else:
+                                logger.warning(f"Empty-reply safety net: still nothing after {self.EMPTY_REPLY_RETRIES} retries (stop_reason={state.stop_reason})")
+                            continue
+
+                        # Create async client for main LLM streaming (after function client has run if applicable)
+                        if self._startup_async_client:
+                            async_client = self._startup_async_client
+                            self._startup_async_client = None # do not reuse the same client
+                        else:
+                            async_client = self.generate_async_client()
+
+                        # Dict to track partial tool calls by index
+                        accumulated_tool_calls = {}
+                        got_content = False
+                        finish_reason = None
+
                         try:
-                            if chunk and chunk.choices and chunk.choices[0].delta:
-                                delta = chunk.choices[0].delta
-                                
-                                # Handle regular content
-                                if delta.content:
-                                    yield ("content", delta.content)
-                                
-                                # Accumulate tool calls by index
-                                if delta.tool_calls:
-                                    for tool_call in delta.tool_calls:
-                                        idx = tool_call.index
-                                        if idx not in accumulated_tool_calls:
-                                            accumulated_tool_calls[idx] = {
-                                                "id": tool_call.id if tool_call.id else "",
-                                                "type": "function",
-                                                "function": {
-                                                    "name": "",
-                                                    "arguments": ""
-                                                }
-                                            }
-                                        
-                                        # Accumulate the parts
-                                        if tool_call.id:
-                                            accumulated_tool_calls[idx]["id"] = tool_call.id
-                                        if tool_call.function and tool_call.function.name:
-                                            accumulated_tool_calls[idx]["function"]["name"] += tool_call.function.name
-                                        if tool_call.function and tool_call.function.arguments:
-                                            accumulated_tool_calls[idx]["function"]["arguments"] += tool_call.function.arguments
-                                
-                        except Exception as e:
-                            logger.error(f"LLM API Connection Error: {e}")
+                            async for chunk in await async_client.chat.completions.create(
+                                model=self.model_name,
+                                messages=openai_messages,
+                                stream=True,
+                                **request_params,
+                            ):
+                                try:
+                                    if chunk and chunk.choices and chunk.choices[0].finish_reason:
+                                        finish_reason = chunk.choices[0].finish_reason
+                                    if chunk and chunk.choices and chunk.choices[0].delta:
+                                        delta = chunk.choices[0].delta
+
+                                        # Handle regular content
+                                        if delta.content:
+                                            got_content = True
+                                            yield ("content", delta.content)
+
+                                        # Accumulate tool calls by index
+                                        if delta.tool_calls:
+                                            for tool_call in delta.tool_calls:
+                                                idx = tool_call.index
+                                                if idx not in accumulated_tool_calls:
+                                                    accumulated_tool_calls[idx] = {
+                                                        "id": tool_call.id if tool_call.id else "",
+                                                        "type": "function",
+                                                        "function": {
+                                                            "name": "",
+                                                            "arguments": ""
+                                                        }
+                                                    }
+
+                                                # Accumulate the parts
+                                                if tool_call.id:
+                                                    accumulated_tool_calls[idx]["id"] = tool_call.id
+                                                if tool_call.function and tool_call.function.name:
+                                                    accumulated_tool_calls[idx]["function"]["name"] += tool_call.function.name
+                                                if tool_call.function and tool_call.function.arguments:
+                                                    accumulated_tool_calls[idx]["function"]["arguments"] += tool_call.function.arguments
+
+                                except Exception as e:
+                                    logger.error(f"LLM API Connection Error: {e}")
+                                    break
+                        finally:
+                            await async_client.close()
+                            async_client = None
+
+                        # After streaming completes, yield any accumulated tool calls
+                        if accumulated_tool_calls:
+                            tool_calls_list = [accumulated_tool_calls[i] for i in sorted(accumulated_tool_calls.keys())]
+                            yield ("tool_calls", tool_calls_list)
+
+                        if got_content or accumulated_tool_calls:
+                            if attempt > 0:
+                                logger.log(23, f"Empty-reply safety net: retry {attempt} succeeded")
                             break
-                    
-                    # After streaming completes, yield any accumulated tool calls
-                    if accumulated_tool_calls:
-                        tool_calls_list = [accumulated_tool_calls[i] for i in sorted(accumulated_tool_calls.keys())]
-                        yield ("tool_calls", tool_calls_list)
+                        if attempt < self.EMPTY_REPLY_RETRIES:
+                            logger.warning(f"Empty-reply safety net: the LLM returned nothing (finish_reason={finish_reason}), retrying ({attempt + 1}/{self.EMPTY_REPLY_RETRIES})...")
+                        else:
+                            logger.warning(f"Empty-reply safety net: still nothing after {self.EMPTY_REPLY_RETRIES} retries (finish_reason={finish_reason})")
                 except Exception as e:
                     utils.play_error_sound()
                     if isinstance(e, APIConnectionError):
@@ -375,9 +481,34 @@ class ClientBase(AIClient):
     
 
     @staticmethod
+    def _with_system_parts(openai_messages: list[dict], system_parts) -> list[dict]:
+        """Copy of the messages with the system prompt rebuilt from the extensions' parts, in their order (the same
+        layout the native path sends, so the unchanged start of the prompt stays cacheable on other services)."""
+        from src.llm import anthropic_native
+        if not openai_messages or openai_messages[0].get('role') != 'system' or not isinstance(openai_messages[0].get('content'), str):
+            return openai_messages
+        text = anthropic_native.join_system_parts(system_parts, openai_messages[0]['content'])
+        return [dict(openai_messages[0], content=text)] + openai_messages[1:]
+
+    @staticmethod
+    def _with_extra_text(openai_messages: list[dict], texts: list[str]) -> list[dict]:
+        """Copy of the messages with extension text added to the newest user message."""
+        for index in range(len(openai_messages) - 1, -1, -1):
+            message = openai_messages[index]
+            if message.get('role') != 'user':
+                continue
+            content = message.get('content')
+            if isinstance(content, list):
+                content = list(content) + [{'type': 'text', 'text': text} for text in texts]
+            else:
+                content = '\n'.join([content or ''] + texts).strip()
+            return openai_messages[:index] + [dict(message, content=content)] + openai_messages[index + 1:]
+        return openai_messages
+
+    @staticmethod
     def _anthropic_model_id(base_url: str, model: str) -> str:
         '''Turns a saved model-list label such as "Claude Haiku 5.5 (claude-haiku-5-5) | Context: 1m" back into its model ID'''
-        if base_url != utils.ANTHROPIC_ENDPOINT or not model:
+        if not utils.is_anthropic_endpoint(base_url) or not model:
             return model
         name = model.split(' | ')[0].strip()
         if name.endswith(')') and '(' in name:
@@ -392,7 +523,7 @@ class ClientBase(AIClient):
     def _strip_unsupported_anthropic_params(base_url: str, llm_params: dict[str, Any] | None) -> dict[str, Any] | None:
         '''Removes request parameters that the Anthropic endpoint rejects or that only apply to OpenRouter.
         Current Claude models return a 400 for non-default sampling values, so temperature / top_p / top_k are dropped.'''
-        if base_url != utils.ANTHROPIC_ENDPOINT or not llm_params:
+        if not utils.is_anthropic_endpoint(base_url) or not llm_params:
             return llm_params
         params = dict(llm_params)
         removed = [key for key in ('temperature', 'top_p', 'top_k') if params.pop(key, None) is not None]
@@ -463,7 +594,7 @@ class ClientBase(AIClient):
                 pass
 
         # Anthropic has its own key file and never falls back to GPT_SECRET_KEY.txt (that key belongs to another service)
-        is_anthropic = target_service == utils.ANTHROPIC_ENDPOINT
+        is_anthropic = utils.is_anthropic_endpoint(target_service)
         key_file_name = 'ANTHROPIC_SECRET_KEY.txt' if is_anthropic else 'GPT_SECRET_KEY.txt'
 
         if not api_key:
@@ -681,7 +812,7 @@ For more information, see here: https://art-from-the-machine.github.io/Mantella/
 
     @staticmethod
     def get_model_list(service: str, default_model: str = "google/gemma-4-26b-a4b-it:free", is_vision: bool = False, is_tool_calling: bool = False, show_key_error: bool = False) -> LLMModelList:
-        if ClientBase._get_endpoint(service) == utils.ANTHROPIC_ENDPOINT:
+        if utils.is_anthropic_endpoint(ClientBase._get_endpoint(service)):
             return ClientBase._get_anthropic_model_list(is_vision, show_key_error)
         if service not in ['OpenAI', 'OpenRouter', 'NanoGPT']:
             return LLMModelList([("Custom model","Custom model")], "Custom model", allows_manual_model_input=True)
@@ -782,7 +913,10 @@ For more information, see here: https://art-from-the-machine.github.io/Mantella/
                             vision_available: str = ' | ✅ Vision' if model.model_extra["architecture"]["modality"] == 'text+image->text' else ''
                             tool_calling_available: str = ' | ✅ Advanced Actions' if 'tools' in model.model_extra['supported_parameters'] else ''
                             reasoning_model: str = ' | ⚠️ Reasoning' if 'reasoning' in model.model_extra['supported_parameters'] else ''
-                            model_display_name = f"{model.id} | Context: {utils.format_context_size(context_size)} | Cost per 1M tokens: Prompt: {utils.format_price(prompt_cost)}. Completion: {utils.format_price(completion_cost)}{vision_available}{tool_calling_available}{reasoning_model}"
+                            cache_read = model.model_extra["pricing"].get("input_cache_read")
+                            cache_text = f". Cache read: {utils.format_price(float(cache_read) * multiplier)}" if cache_read not in (None, '', '0') else ''
+                            # OpenRouter lists one price per model; each provider may charge differently
+                            model_display_name = f"{model.id} | Context: {utils.format_context_size(context_size)} | Cost per 1M tokens: Prompt: {utils.format_price(prompt_cost)}. Completion: {utils.format_price(completion_cost)}{cache_text}{vision_available}{tool_calling_available}{reasoning_model}"
 
                             ClientBase.api_token_limits[model.id.split('/')[-1]] = context_size
                         else:

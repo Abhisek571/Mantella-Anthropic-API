@@ -254,13 +254,25 @@ def build_pyz(
     return PYZ_HEADER + python_magic + struct.pack("!i", position) + b"".join(chunks) + marshal.dumps(toc)
 
 
+PYZ_ITEM_MODULE = 0
+PYZ_ITEM_PKG = 1
+
+
 def patch_pyz(
     data: bytes,
     replacements: Mapping[str, types.CodeType],
     *,
     expected_fingerprints: Mapping[str, str],
+    additions: Mapping[str, tuple[int, types.CodeType]] | None = None,
 ) -> bytes:
     archive = parse_pyz(data)
+    additions = additions or {}
+    clashing = sorted(set(additions).intersection(archive.toc) | set(additions).intersection(replacements))
+    if clashing:
+        raise ValueError("refusing to add modules that already exist: " + ", ".join(clashing[:5]))
+    bad_kinds = sorted(name for name, (kind, _code) in additions.items() if kind not in (PYZ_ITEM_MODULE, PYZ_ITEM_PKG))
+    if bad_kinds:
+        raise ValueError("invalid PYZ item kind for: " + ", ".join(bad_kinds[:5]))
     for name, expected in expected_fingerprints.items():
         if name not in archive.toc:
             raise ValueError(f"version gate failed: required PYZ module {name!r} is absent")
@@ -292,6 +304,11 @@ def patch_pyz(
         blob = zlib.compress(marshal.dumps(code))
         chunks.append(blob)
         toc[name] = (0, position, len(blob))
+        position += len(blob)
+    for name, (kind, code) in additions.items():
+        blob = zlib.compress(marshal.dumps(code))
+        chunks.append(blob)
+        toc[name] = (kind, position, len(blob))
         position += len(blob)
 
     return PYZ_HEADER + archive.python_magic + struct.pack("!i", position) + b"".join(chunks) + marshal.dumps(toc)
@@ -341,7 +358,9 @@ def patch_executable(
     replacements: Mapping[str, types.CodeType],
     expected_exe_sha256: str,
     expected_module_fingerprints: Mapping[str, str],
+    additions: Mapping[str, tuple[int, types.CodeType]] | None = None,
 ) -> tuple[bytes, dict[str, object]]:
+    additions = additions or {}
     input_hash = sha256(data)
     if input_hash.lower() != expected_exe_sha256.lower():
         raise ValueError(
@@ -353,6 +372,7 @@ def patch_executable(
         original_pyz,
         replacements,
         expected_fingerprints=expected_module_fingerprints,
+        additions=additions,
     )
     output = _rebuild_carchive(archive, patched_pyz)
     reparsed = parse_carchive(output)
@@ -360,6 +380,9 @@ def patch_executable(
     for name, code in replacements.items():
         if code_fingerprint(reparsed_pyz.code(name)) != code_fingerprint(code):
             raise ValueError(f"post-write verification failed for {name}")
+    for name, (kind, code) in additions.items():
+        if reparsed_pyz.toc[name][0] != kind or code_fingerprint(reparsed_pyz.code(name)) != code_fingerprint(code):
+            raise ValueError(f"post-write verification failed for added module {name}")
 
     report: dict[str, object] = {
         "input_sha256": input_hash,
@@ -372,6 +395,7 @@ def patch_executable(
         "input_pyz_sha256": sha256(original_pyz),
         "output_pyz_sha256": sha256(patched_pyz),
         "replaced_modules": list(replacements),
+        "added_modules": len(additions),
         "module_fingerprints": {
             name: code_fingerprint(reparsed_pyz.code(name)) for name in replacements
         },

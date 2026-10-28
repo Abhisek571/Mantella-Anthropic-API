@@ -6,8 +6,8 @@ This is an unofficial patch. Install Mantella and make sure normal conversations
 
 REQUIREMENTS
 Mantella 0.14 (Nexus release) for Skyrim SE, working, with all of its requirements.
-Optional: Mantella Dual Input 1.1. If it is installed, this patch is built on top of it
-and keeps Dual Input working.
+Mantella Dual Input 1.1 is included (type or speak in the same conversation). Disable the
+separate Mantella Dual Input mod if you have it.
 An Anthropic API key: https://platform.claude.com/settings/keys (API usage is billed by Anthropic).
 Python 3.11 is needed ONCE to prepare the backend.
 Use the official Windows Python 3.11 installer from https://www.python.org/downloads/windows/
@@ -15,19 +15,17 @@ Install its Python launcher so the command "py -3.11" works. No pip packages are
 
 Setup checks the exact executable hash, not just its version label. Supported:
 Mantella 0.14              b103fb5cbdfd9b3cb7bb1c157ad67bca1a1d8fcd554e76f2bd0ca5947d0757b1
-Mantella Dual Input 1.1    b05a23b4e71d1115e8e7a57cc5fc6a8279a0d70e859ca9688429dca8c118b7ac
 Other Mantella builds are rejected rather than patched on a guess.
 
 INSTALL WITH MO2
-1. Close Skyrim and Mantella. Install this ZIP as its own mod named Mantella - Anthropic API.
+1. Close Skyrim and Mantella. Install this ZIP as its own mod named Mantella - Direct AI Connect.
 2. Right-click this mod and open its folder in Explorer. Run Setup Backend.cmd.
-3. Setup finds Mantella.exe in the other MO2 mod folders. If Mantella Dual Input 1.1 is
-   installed it is used; otherwise the original Mantella 0.14 is used. If it asks, paste the
-   full path to that Mantella.exe, normally inside the mod at
+3. Setup finds the original Mantella 0.14 Mantella.exe in the other MO2 mod folders. If it
+   asks, paste the full path to that Mantella.exe, normally inside the Mantella mod at
    SKSE\Plugins\MantellaSoftware\Mantella.exe. Do not select this patch's own copy.
-4. Wait for "backend ready". In MO2's left pane, place this mod BELOW the mod it names
-   (Mantella, or Mantella Dual Input) so it has higher priority and its Mantella.exe wins.
-   Enable it.
+4. Wait for "backend ready". In MO2's left pane, place this mod BELOW Mantella so it has
+   higher priority and its Mantella.exe and scripts win. Enable it. Disable the separate
+   Mantella Dual Input mod if you have it (this patch includes it).
 5. Create a text file named ANTHROPIC_SECRET_KEY.txt in the same folder as your
    GPT_SECRET_KEY.txt (the main Mantella mod folder) and paste your Anthropic API key on
    the first line.
@@ -57,16 +55,26 @@ Example for Haiku:
   {"max_tokens": 250, "stop": ["#"], "extra_body": {"thinking": {"type": "disabled"}}}
 
 UPDATING / REMOVING
-A new Mantella or Mantella Dual Input version needs an update of this patch first (setup
+A new Mantella version needs an update of this patch first (setup
 rejects executables it does not know). After updating this patch, rerun Setup Backend.cmd.
 To remove, set LLM Service back to another service, close Mantella and disable this mod.
 Original Mantella files and your settings are not changed by setup.
 
 LIMITS
-Requests use Anthropic's OpenAI-compatible endpoint. It does not support prompt caching, so
-every reply resends the whole prompt (bios, memories, history) at the normal input price.
+Anthropic (Official) uses Anthropic's OpenAI-compatible endpoint. It does not support prompt
+caching, so every reply resends the whole prompt (bios, memories, history) at the normal input
+price. Anthropic (Native, cached) uses Anthropic's own API with caching: after the first reply,
+the repeated part of the prompt is read from the cache at about a tenth of the price. It is
+offered for conversations and summaries; vision and tool-calling LLMs use Anthropic (Official).
 Claude models may refuse some content that other models allow.
-Tested on one Windows setup with Mantella Dual Input 1.1; not broadly tested.
+Tested on one Windows setup; not broadly tested.
+
+DUAL INPUT AND GOODBYES
+Dual Input 1.1 is part of this patch: in Mantella's MCM (General page), enable Dual Input
+and set the Type Reply and Speak Reply keys. Its game scripts (MantellaConversation,
+MantellaRepository, MantellaMCM, MantellaMCM_GeneralSettings) ship in Scripts\.
+"Goodbye, <name>" in a one-on-one conversation ends it; in Mantella 0.14 it removed the only
+NPC and the conversation never ended.
 
 PUBLIC PACKAGE
 This download contains the backend patch source and the setup tool. It does not contain
