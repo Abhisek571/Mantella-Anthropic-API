@@ -2,18 +2,24 @@
   "bases": {
     "b103fb5cbdfd9b3cb7bb1c157ad67bca1a1d8fcd554e76f2bd0ca5947d0757b1": {
       "name": "Mantella 0.14",
-      "patched_sha256": "b614ed47f1a6429c809b5a6efe6666388e8037a3c9504255f2c3ef8779edeee2"
-    },
-    "b05a23b4e71d1115e8e7a57cc5fc6a8279a0d70e859ca9688429dca8c118b7ac": {
-      "name": "Mantella Dual Input 1.1",
-      "patched_sha256": "869ede6ee3ff2ccaf28470b849a0a18426831b67205270791694a25b107e9afa"
+      "patched_sha256": "3466f3cdb49eec22b6a33f50d574ffb74f2bfb2568f135e93c0ab595f037373d"
     }
   },
   "modules": {
-    "src.utils": "5aca007bce1bf2b643d71ad8dc25e27a27640d1ef762d0c0e46379b8a843c7af",
-    "src.llm.client_base": "a9a331e0369c085bc7619e2807b49afb910f2c58b89d4085ccd690a4b95ac131",
-    "src.config.definitions.llm_definitions": "0006db30108991a8ec6e6657fd8c524d8004447e61ef498e2dcae22497d24054",
+    "src.utils": "6cee1deb95dd67ae864baaae7d7cbaeefb8cecbb6750a7a170875d5f7df51640",
+    "src.llm.client_base": "d9ca91578a94283e65bbd72ada1bd54d27e6683c68c41ac7463848a7e6aab5b2",
+    "src.config.definitions.llm_definitions": "4e06b3bd00cc8c6f792639d8f0bcc7af3fde7bbf52f990cb87bd12a4bc4ba573",
     "src.config.definitions.vision_definitions": "dc4442abd6a0b9044daaaabfc08eaa0a13114598f5f2b69eace27bd460d2e060",
-    "src.config.definitions.action_definitions": "fa9bc2fac7442292f50d476ade6495ec9739a6eb9e734db19e68c8722de1f136"
-  }
+    "src.config.definitions.action_definitions": "fa9bc2fac7442292f50d476ade6495ec9739a6eb9e734db19e68c8722de1f136",
+    "src.http.routes.mantella_route": "9c8d2f4b25ab417d527b6f55ae93a17eeac8d34996fc98337f02e904e478fa5c",
+    "src.remember.summaries": "f3847f45bd50c3067f202ddd6c8c40e217688db499048c6b04db75ae5f9e7b4a",
+    "src.ui.start_ui": "704ce91de99890b315557858949bab131b42d088937444190c532d1a28e3db99",
+    "src.conversation.conversation": "561351ebd9fcbcd2ee8a4da86e65b7f69391405dec425482033ba6b7813072f9",
+    "src.game_manager": "2183fff78c666c59a8b9f8e2665a41cad72d7a7de5cb0efd8d9c3f2c24d7a81b",
+    "src.http.communication_constants": "885b58b4836b4c24ae709cf3da44de247ccefa1006aa6f319d9497d371416d13",
+    "src.llm.anthropic_native": "f0f2cdf4b5e79df23dbec76f8d1e2b224d871388011687a09ac29a7a9ff8283f",
+    "src.extensions": "692f58f4d3d2bf7d75c852254d52eea8b65b0a31a2b0afaf0132f3d7adab929e",
+    "src.dual_input": "9bafc1b0490b4a29f1779976c4a50e43e70b44ac1c4d6fb7436501a381b3ad76"
+  },
+  "vendor": "909622b8e8fd7011242bd73f0732b4be87d640e42eabbe66bb10356bee99a245"
 }

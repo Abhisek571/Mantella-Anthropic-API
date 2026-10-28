@@ -303,8 +303,10 @@ def format_price(price):
         return 'free'
     elif price.is_integer():
         return f"${price:.0f}"
-    else:
+    elif price >= 1:
         return f"${price:.2f}"
+    else:  # cheap models: enough digits to tell them apart ($0.065, $0.003)
+        return '$' + f"{price:.6f}".rstrip('0')
     
 
 def get_openai_model_list():
@@ -356,6 +358,13 @@ def get_openai_model_list():
 
 
 ANTHROPIC_ENDPOINT = 'https://api.anthropic.com/v1'
+# Native Messages API (Anthropic SDK), which supports prompt caching; the OpenAI-compatible endpoint above does not
+ANTHROPIC_NATIVE_ENDPOINT = 'https://api.anthropic.com'
+
+
+def is_anthropic_endpoint(url: str) -> bool:
+    return url in (ANTHROPIC_ENDPOINT, ANTHROPIC_NATIVE_ENDPOINT)
+
 
 _KNOWN_SERVICES: dict[str, str] = {
     'openai': 'https://api.openai.com/v1',
@@ -369,6 +378,9 @@ _KNOWN_SERVICES: dict[str, str] = {
     'anthropic(official)': ANTHROPIC_ENDPOINT,
     'anthropic': ANTHROPIC_ENDPOINT,
     'https://api.anthropic.com/v1/': ANTHROPIC_ENDPOINT,
+    'anthropic(native,cached)': ANTHROPIC_NATIVE_ENDPOINT,
+    'anthropic-native': ANTHROPIC_NATIVE_ENDPOINT,
+    'https://api.anthropic.com/': ANTHROPIC_NATIVE_ENDPOINT,
 
     'kobold': 'http://127.0.0.1:5001/v1',
     'koboldcpp': 'http://127.0.0.1:5001/v1',
