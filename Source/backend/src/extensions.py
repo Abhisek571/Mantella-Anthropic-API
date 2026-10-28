@@ -15,6 +15,8 @@ Hooks:
     conversation_limit(tokens) -> tokens     save the memory and trim the talk once it is this long (0 = stock:
                                              90% of the model's context)
     ui_tab(gr) -> None                       builds a section inside the "Living World" tab of the settings UI
+    ui_page(gr, config) -> None              builds a whole tab of its own (with gr.Tab(...)) after that one; config
+                                             is Mantella's ConfigLoader, so a page can read and change settings
 Filter hooks run in load order (folder names sorted); returning None keeps the value unchanged.
 """
 import importlib.util
@@ -29,7 +31,7 @@ import src.utils as utils
 logger = utils.get_logger()
 
 EXTENSIONS_DIR = 'extensions'
-HOOKS = ('filter_tools', 'system_parts', 'extra_user_text', 'summarize', 'memory_text', 'conversation_limit', 'ui_tab')
+HOOKS = ('filter_tools', 'system_parts', 'extra_user_text', 'summarize', 'memory_text', 'conversation_limit', 'ui_tab', 'ui_page')
 USAGE_LOG_SIZE = 200
 
 

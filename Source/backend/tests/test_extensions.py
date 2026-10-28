@@ -56,6 +56,9 @@ with tempfile.TemporaryDirectory() as tmp:
     check('raising hook logged', any('raises' in r.getMessage() for r in records if r.levelno >= logging.WARNING))
     check('None from a filter keeps the value', reg.filter('memory_text', 'stock memory', {}) == 'stock memory')
     check('has() for registered hook', reg.has('filter_tools') and not reg.has('ui_tab'))
+    # test_ui_page_hook: an extension may add a whole tab of its own to the settings UI
+    page = ext.Registry(); page.api_for('lw').on('ui_page', lambda gr, config: None)
+    check('ui_page is a known hook', page.has('ui_page'))
     # usage log, capped
     for i in range(ext.USAGE_LOG_SIZE + 5):
         reg.record_usage({'cache_read': i})

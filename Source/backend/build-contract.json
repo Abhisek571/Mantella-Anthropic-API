@@ -2,7 +2,7 @@
   "bases": {
     "b103fb5cbdfd9b3cb7bb1c157ad67bca1a1d8fcd554e76f2bd0ca5947d0757b1": {
       "name": "Mantella 0.14",
-      "patched_sha256": "3466f3cdb49eec22b6a33f50d574ffb74f2bfb2568f135e93c0ab595f037373d"
+      "patched_sha256": "c36d7bd445ddbabe83246a5666504cfaa9c342de86b75e9acbbc21709b073301"
     }
   },
   "modules": {
@@ -13,12 +13,12 @@
     "src.config.definitions.action_definitions": "fa9bc2fac7442292f50d476ade6495ec9739a6eb9e734db19e68c8722de1f136",
     "src.http.routes.mantella_route": "9c8d2f4b25ab417d527b6f55ae93a17eeac8d34996fc98337f02e904e478fa5c",
     "src.remember.summaries": "f3847f45bd50c3067f202ddd6c8c40e217688db499048c6b04db75ae5f9e7b4a",
-    "src.ui.start_ui": "704ce91de99890b315557858949bab131b42d088937444190c532d1a28e3db99",
+    "src.ui.start_ui": "92e26c7d72099235058b1ae697f5d67c09b525b150aaf4ba9861c7f8d2fb26f9",
     "src.conversation.conversation": "561351ebd9fcbcd2ee8a4da86e65b7f69391405dec425482033ba6b7813072f9",
-    "src.game_manager": "2183fff78c666c59a8b9f8e2665a41cad72d7a7de5cb0efd8d9c3f2c24d7a81b",
+    "src.game_manager": "7e403a38f296254ecac9b7600360f1dd49f9817ce0f6f369b8131a67e1051090",
     "src.http.communication_constants": "885b58b4836b4c24ae709cf3da44de247ccefa1006aa6f319d9497d371416d13",
     "src.llm.anthropic_native": "f0f2cdf4b5e79df23dbec76f8d1e2b224d871388011687a09ac29a7a9ff8283f",
-    "src.extensions": "692f58f4d3d2bf7d75c852254d52eea8b65b0a31a2b0afaf0132f3d7adab929e",
+    "src.extensions": "9ba2e1242b64a32182b4e934d3387338fb950127696f3e2590ee4510e8409365",
     "src.dual_input": "9bafc1b0490b4a29f1779976c4a50e43e70b44ac1c4d6fb7436501a381b3ad76"
   },
   "vendor": "909622b8e8fd7011242bd73f0732b4be87d640e42eabbe66bb10356bee99a245"

@@ -44,17 +44,21 @@ class StartUI(routeable):
         return None #settings
     
     def __generate_extension_tab(self):
-        """The "Living World" tab, only when an installed extension adds a section to it."""
+        """The "Living World" tab, only when an installed extension adds a section to it, then any tabs of their own."""
         extensions = src_extensions.registry()
-        if not extensions.has('ui_tab'):
-            return
-        with gr.Tab("Living World"):
-            for name, build in extensions.hook_fns('ui_tab'):
-                try:
-                    build(gr)
-                except Exception as e:
-                    logger.warning(f"Extension '{name}' failed to build its settings section: {e}")
-                    gr.Markdown(f"**{name}** could not show its section: {e}")
+        if extensions.has('ui_tab'):
+            with gr.Tab("Living World"):
+                for name, build in extensions.hook_fns('ui_tab'):
+                    try:
+                        build(gr)
+                    except Exception as e:
+                        logger.warning(f"Extension '{name}' failed to build its settings section: {e}")
+                        gr.Markdown(f"**{name}** could not show its section: {e}")
+        for name, build in extensions.hook_fns('ui_page'):
+            try:
+                build(gr, self._config)
+            except Exception as e:
+                logger.warning(f"Extension '{name}' failed to build its settings tab: {e}")
 
     def __generate_chat_page(self):
         return gr.Column()

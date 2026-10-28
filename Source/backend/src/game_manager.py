@@ -429,6 +429,9 @@ class GameStateManager:
                 custom_values = json[comm_consts.KEY_ACTOR_CUSTOMVALUES]
                 if not custom_values:
                     custom_values: dict[str, Any] = {}
+            if bool(json[comm_consts.KEY_ACTOR_ISPLAYER]) and self.__config.player_character_description.strip():
+                # a description typed in the settings UI wins over the MCM's
+                custom_values.pop(comm_consts.KEY_ACTOR_PC_DESCRIPTION, None)
             equipment = Equipment({})
             if json.__contains__(comm_consts.KEY_ACTOR_EQUIPMENT):
                 equipment = Equipment(self.__convert_to_equipment_item_dictionary(json[comm_consts.KEY_ACTOR_EQUIPMENT]))
