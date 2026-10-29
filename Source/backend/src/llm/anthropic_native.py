@@ -113,13 +113,51 @@ def _user_content(content: Any) -> list[dict]:
     return [{'type': 'text', 'text': text}] if text.strip() else []
 
 
-def convert_messages(openai_messages: list[dict], thinking_by_tool_call: dict[str, list[dict]]) -> tuple[list[dict], list[dict]]:
+def stored_thinking(entry: Any) -> list[dict]:
+    """Thinking blocks of a thinking_by_tool_call entry ({'thinking': [...], 'prefix': ...}; a plain list also works)."""
+    if isinstance(entry, dict):
+        return list(entry.get('thinking') or [])
+    return list(entry or [])
+
+
+def prefix_key(system: Any, tools: Any, messages: list[dict]) -> str:
+    """Fingerprint of what precedes a reply (system, tools, earlier messages), cache markers left out."""
+    import hashlib
+
+    def clean(value):
+        if isinstance(value, dict):
+            return {k: clean(v) for k, v in value.items() if k != 'cache_control'}
+        if isinstance(value, list):
+            return [clean(v) for v in value]
+        return value
+    text = json.dumps(clean([system or [], tools or [], messages]), sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(text.encode('utf-8')).hexdigest()
+
+
+def drop_changed_thinking(request: dict[str, Any], thinking_by_tool_call: dict[str, Any]):
+    """Removes a replayed thinking block when the system, tools or earlier messages differ from the request it came
+    from (the API rejects it then). The reply goes on without it, the same as the API's own drop_block setting."""
+    messages = request['messages']
+    for index, message in enumerate(messages):
+        if message['role'] != 'assistant' or not any(b['type'] in ('thinking', 'redacted_thinking') for b in message['content']):
+            continue
+        call_id = next((b['id'] for b in message['content'] if b['type'] == 'tool_use'), '')
+        entry = thinking_by_tool_call.get(call_id)
+        made_with = entry.get('prefix') if isinstance(entry, dict) else None
+        if made_with != prefix_key(request.get('system'), request.get('tools'), messages[:index]):
+            message['content'] = [b for b in message['content'] if b['type'] not in ('thinking', 'redacted_thinking')]
+            logger.debug("Anthropic (Native): the conversation before the last action changed, so its thinking is not sent back")
+
+
+def convert_messages(openai_messages: list[dict], thinking_by_tool_call: dict[str, Any]) -> tuple[list[dict], list[dict]]:
     """OpenAI chat messages -> (system blocks, Messages API messages).
 
     System messages are joined into the top-level system prompt. Tool results become tool_result blocks in a
-    user turn. Thinking blocks the API returned with a tool call are put back in front of that tool call, since
-    the API expects them unchanged.
+    user turn. Thinking blocks are put back only on the latest assistant turn, when it is a tool call whose result
+    follows: that turn is being continued and needs them. Earlier turns' thinking may be left out, and replaying it
+    would be rejected once anything before it changed.
     """
+    replay: tuple[int, list[dict]] | None = None
     system_texts: list[str] = []
     messages: list[dict] = []
 
@@ -144,9 +182,6 @@ def convert_messages(openai_messages: list[dict], thinking_by_tool_call: dict[st
         elif role == 'assistant':
             blocks: list[dict] = []
             tool_calls = message.get('tool_calls') or []
-            for call in tool_calls:
-                blocks.extend(thinking_by_tool_call.get(call.get('id', ''), []))
-                break  # the thinking for one assistant turn is stored under its first tool call
             text = message.get('content')
             if isinstance(text, str) and text.strip():
                 blocks.append({'type': 'text', 'text': text})
@@ -159,6 +194,8 @@ def convert_messages(openai_messages: list[dict], thinking_by_tool_call: dict[st
                 blocks.append({'type': 'tool_use', 'id': call.get('id', ''), 'name': function.get('name', ''),
                                'input': arguments if isinstance(arguments, dict) else {}})
             add('assistant', blocks)
+            if tool_calls:  # the thinking for one assistant turn is stored under its first tool call
+                replay = (len(messages) - 1, stored_thinking(thinking_by_tool_call.get(tool_calls[0].get('id', ''))))
         elif role == 'tool':
             content = message.get('content')
             add('user', [{'type': 'tool_result', 'tool_use_id': message.get('tool_call_id', ''),
@@ -168,6 +205,11 @@ def convert_messages(openai_messages: list[dict], thinking_by_tool_call: dict[st
     for message in messages:
         if message['role'] == 'user':
             message['content'].sort(key=lambda block: block['type'] != 'tool_result')
+    last_assistant = max((i for i, m in enumerate(messages) if m['role'] == 'assistant'), default=None)
+    answered = last_assistant is not None and last_assistant + 1 < len(messages) and \
+        any(block['type'] == 'tool_result' for block in messages[last_assistant + 1]['content'])
+    if replay and replay[1] and replay[0] == last_assistant and answered:
+        messages[last_assistant]['content'][0:0] = [dict(block) for block in replay[1]]  # thinking opens the turn
     if messages and messages[0]['role'] != 'user':
         messages.insert(0, {'role': 'user', 'content': [{'type': 'text', 'text': '...'}]})
 
@@ -250,7 +292,7 @@ def join_system_parts(system_parts: Callable[[dict[str, str]], dict[str, str]], 
 
 
 def build_request(model: str, openai_messages: list[dict], request_params: dict[str, Any] | None,
-                  tools: list[dict] | None, thinking_by_tool_call: dict[str, list[dict]], cache: bool,
+                  tools: list[dict] | None, thinking_by_tool_call: dict[str, Any], cache: bool,
                   extra_texts: list[str] | None = None,
                   system_parts: Callable[[dict[str, str]], dict[str, str]] | None = None) -> dict[str, Any]:
     """Keyword arguments for client.messages.create(). extra_texts go into the newest message after the cache
@@ -294,6 +336,7 @@ def build_request(model: str, openai_messages: list[dict], request_params: dict[
         request['extra_body'] = extra_body
     if extra_headers:
         request['extra_headers'] = extra_headers
+    drop_changed_thinking(request, thinking_by_tool_call)
     return request
 
 
@@ -401,7 +444,7 @@ class StreamState:
         return None
 
 
-async def stream_reply(client: Any, request: dict[str, Any], thinking_by_tool_call: dict[str, list[dict]],
+async def stream_reply(client: Any, request: dict[str, Any], thinking_by_tool_call: dict[str, Any],
                        state: StreamState) -> AsyncGenerator[str, None]:
     """Streams one reply, yielding text. Tool calls and the stop reason are left in `state`."""
     stream = await client.messages.create(stream=True, **request)
@@ -412,8 +455,10 @@ async def stream_reply(client: Any, request: dict[str, Any], thinking_by_tool_ca
     if state.stop_reason == 'refusal':
         logger.warning("Anthropic (Native): Claude declined this reply (stop_reason=refusal)")
     if state.tool_calls and state.thinking:
-        thinking_by_tool_call[state.tool_calls[0]['id']] = list(state.thinking)
-        # keep only recent turns; older thinking is not needed once the tool call has been answered
+        thinking_by_tool_call[state.tool_calls[0]['id']] = {
+            'thinking': list(state.thinking),
+            'prefix': prefix_key(request.get('system'), request.get('tools'), request['messages'])}
+        # keep only recent turns; only the latest tool call's thinking is ever sent back
         while len(thinking_by_tool_call) > 20:
             thinking_by_tool_call.pop(next(iter(thinking_by_tool_call)))
 

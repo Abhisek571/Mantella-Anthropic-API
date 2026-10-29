@@ -7,6 +7,8 @@ import time
 import tiktoken
 import json
 import os
+import codecs
+import locale
 import requests
 from pathlib import Path
 from src.llm.ai_client import AIClient
@@ -39,6 +41,30 @@ def only_offered(tool_calls: list, tools: list | None) -> list:
         if _tool_name(call) not in offered:
             logger.warning(f"Ignored a call to action '{_tool_name(call)}': it was not offered for this reply")
     return kept
+
+
+def read_key_text(path) -> str:
+    """Text of a key file, whatever editor saved it: UTF-8 with or without a BOM, UTF-16 with a BOM (PowerShell 5.1
+    `>`), else the system code page."""
+    raw = Path(path).read_bytes()
+    if raw.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        return raw.decode('utf-16')
+    try:
+        return raw.decode('utf-8-sig')
+    except UnicodeDecodeError:
+        return raw.decode(locale.getpreferredencoding(False), errors='replace')
+
+
+def clean_key(text) -> str:
+    """The key from a key file's text or a secret_keys.json value: the first non-empty line, without surrounding
+    spaces or matching quotes."""
+    for line in str(text).splitlines():
+        line = line.strip()
+        if len(line) >= 2 and line[0] == line[-1] and line[0] in ('"', "'"):
+            line = line[1:-1].strip()
+        if line:
+            return line
+    return ''
 
 
 class VisionMode(Enum):
@@ -74,7 +100,7 @@ class ClientBase(AIClient):
         self._base_url = self._get_endpoint(api_url)
         # Anthropic (Native, cached) talks to the Messages API through the Anthropic SDK instead of the OpenAI client
         self._is_native: bool = self._base_url == utils.ANTHROPIC_NATIVE_ENDPOINT
-        self._thinking_by_tool_call: dict[str, list[dict]] = {}
+        self._thinking_by_tool_call: dict[str, Any] = {}
         self._model_name: str = ClientBase._anthropic_model_id(self._base_url, llm)
         self._startup_async_client: AsyncOpenAI | None = None
         self._request_params: dict[str, Any] | None = ClientBase._strip_unsupported_anthropic_params(self._base_url, llm_params)
@@ -601,17 +627,19 @@ class ClientBase(AIClient):
         for folder in [mod_parent_folder, Path('.')]:
             json_path = folder / 'secret_keys.json'
             try:
-                with open(json_path, 'r') as f:
-                    keys_dict: dict = json.load(f)
+                keys_dict = json.loads(read_key_text(json_path))
+                if not isinstance(keys_dict, dict):
+                    logger.warning(f'{json_path} should hold {{"service name": "key"}} pairs; it was ignored')
+                    keys_dict = {}
                 for api_name, api_key_val in keys_dict.items():
                     if ClientBase._get_endpoint(str(api_name)) == target_service:
-                        matching_api_key = str(api_key_val).strip()
+                        matching_api_key = clean_key(api_key_val)
                         if matching_api_key:
                             api_key = matching_api_key
                             break
                 if api_key:
                     break
-            except (FileNotFoundError, PermissionError, json.JSONDecodeError):
+            except (FileNotFoundError, PermissionError, ValueError):  # ValueError covers bad JSON and text
                 pass
 
         # Anthropic has its own key file and never falls back to GPT_SECRET_KEY.txt (that key belongs to another service)
@@ -621,11 +649,10 @@ class ClientBase(AIClient):
         if not api_key:
             for folder in [mod_parent_folder, Path('.')]:
                 try:
-                    with open(folder / key_file_name, 'r') as f:
-                        val = f.readline().strip()
-                        if val:
-                            api_key = val
-                            break
+                    val = clean_key(read_key_text(folder / key_file_name))
+                    if val:
+                        api_key = val
+                        break
                 except (FileNotFoundError, PermissionError):
                     pass
 

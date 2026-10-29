@@ -53,13 +53,22 @@ temperature, top_p, top_k and the OpenRouter "provider" block are removed from t
 Parameters for Anthropic requests (current Claude models reject them). Mantella's log says
 which ones were ignored.
 
-Faster replies: current Claude models think before answering. To turn that off, put this
-in LLM Parameters (Large Language Model tab, Advanced). These two lines are for those two
-models only; other models (Opus, Fable) need nothing here:
-  Claude Haiku 5.5:   "extra_body": {"thinking": {"type": "disabled"}}
-  Claude Sonnet 5.5:  "extra_body": {"thinking": {"type": "between_tools"}}
-Example for Haiku:
+max_tokens: current Claude models think before answering, and the thinking counts toward
+max_tokens. With thinking on (always for Opus and Fable), Mantella's default 250 can cut
+replies short or leave them empty. Set max_tokens to 2000 in LLM Parameters (Large Language
+Model tab, Advanced); spoken lines stay short, and you only pay for tokens actually used.
+
+Faster replies: thinking can be reduced on two models. Each line works ONLY on its own model;
+on any other model it makes every reply fail (error 400, the NPC stays silent). Remove the
+line before you switch model. Opus and Fable cannot turn thinking off.
+  Claude Haiku 5.5 only:   "extra_body": {"thinking": {"type": "disabled"}}
+  Claude Sonnet 5.5 only:  "extra_body": {"thinking": {"type": "between_tools"}}
+Do not add reasoning_effort "xhigh" or "max" next to either line (also error 400).
+Example for Haiku (thinking off, so 250 is enough):
   {"max_tokens": 250, "stop": ["#"], "extra_body": {"thinking": {"type": "disabled"}}}
+
+Antivirus: if the Anthropic services are missing after setup, or setup says Mantella.exe is
+missing or changed, your antivirus probably removed the new file. Allow it and rerun setup.
 
 UPDATING / REMOVING
 A new Mantella version needs an update of this patch first (setup

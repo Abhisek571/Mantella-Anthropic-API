@@ -33,6 +33,29 @@ with tempfile.TemporaryDirectory() as tmp:
         check('unsupported exe refused', 'Unsupported Mantella executable' in str(e) and 'Dual Input' not in str(e).split('Supported:')[-1], str(e))
     check('nothing written', not (Path(tmp) / 'out').exists())
 
+# test_written_exe_checked (DACN-07): "backend ready" only when the exe on disk is the one just built; antivirus
+# removing or cutting it is named as the likely cause.
+with tempfile.TemporaryDirectory() as tmp:
+    exe, data = Path(tmp) / 'Mantella.exe', b'MZ patched build'
+    exe.write_bytes(data)
+    checker = getattr(S, 'check_written', None)
+    def written_error(path, expected):
+        try:
+            checker(path, expected)
+            return None
+        except ValueError as e:
+            return str(e)
+    check('check_written exists', checker is not None)
+    if checker:
+        check('intact exe passes', written_error(exe, data) is None, written_error(exe, data))
+        exe.write_bytes(data[:4])
+        error = written_error(exe, data)
+        check('cut exe refused, antivirus named', error is not None and 'antivirus' in error.lower(), error)
+        exe.unlink()
+        error = written_error(exe, data)
+        check('missing exe refused, antivirus named', error is not None and 'antivirus' in error.lower(), error)
+    check('build checks the written exe', 'check_written(output, data)' in (ROOT / 'setup_backend.py').read_text(encoding='utf-8'))
+
 
 # test_goodbye_name_ends_one_on_one: "goodbye <name>" removes that NPC only when others stay in the talk;
 # with one NPC it ends the talk (removing the last NPC left the game waiting forever).
