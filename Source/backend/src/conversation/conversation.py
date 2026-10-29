@@ -561,11 +561,25 @@ class Conversation:
                     tools = FunctionManager.generate_context_aware_tools(self.__context, self.__game)
                 # Capture current OpenTelemetry context for the new thread
                 opentelemetry_context = OpenTelemetryContext.get_current()
+                keyword_actions = self.__offered_keyword_actions(self.context.config.actions)
                 def thread_target():
                     set_parent_context(opentelemetry_context)
-                    self.__output_manager.generate_response(self.__messages, self.__context.npcs_in_conversation, self.__sentences, self.context.config.actions, tools, self.__game)
+                    self.__output_manager.generate_response(self.__messages, self.__context.npcs_in_conversation, self.__sentences, keyword_actions, tools, self.__game)
                 self.__generation_thread = Thread(target=thread_target)
                 self.__generation_thread.start()
+
+    @staticmethod
+    def __offered_keyword_actions(actions: list[Action]) -> list[Action]:
+        """The actions whose "Name:" keyword may fire from the NPC's text: the same ones the extensions would offer
+        as tools to these speakers. Without this, a line containing e.g. "Undress:" ran an action that is hidden from
+        this NPC as a tool."""
+        import src.extensions as src_extensions
+        extensions = src_extensions.registry()
+        if not actions or not extensions.has('filter_tools'):
+            return actions
+        as_tools = [{'type': 'function', 'function': {'name': action.name}} for action in actions]
+        offered = {t.get('function', {}).get('name') for t in extensions.filter('filter_tools', as_tools, {'keyword_actions': True}) or []}
+        return [action for action in actions if action.name in offered]
 
     @utils.time_it
     def __stop_generation(self):

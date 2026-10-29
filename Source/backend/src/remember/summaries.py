@@ -1,5 +1,6 @@
 from collections import defaultdict
 import os
+import re
 import time
 from typing import Dict, List
 from src.config.config_loader import ConfigLoader
@@ -17,6 +18,16 @@ from src import utils
 import src.extensions as src_extensions
 
 logger = utils.get_logger()
+
+_UNSAFE_PATH_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def _safe_part(text: str) -> str:
+    """A name from the game used as one folder or file name: characters Windows refuses and '..' become '_', so a
+    name like '../x' or 'Jarl: Balgruuf' can't write outside the conversations folder or fail the save. Ordinary
+    names are unchanged, so existing summary folders are still found."""
+    safe = _UNSAFE_PATH_CHARS.sub('_', str(text)).replace('..', '_').strip().rstrip('. ')
+    return safe or '_'
 
 
 class CharacterSummaryParameters:
@@ -245,9 +256,10 @@ class Summaries(Remembering):
             str: Path to the latest conversation summary file
         """
         # Remove trailing numbers from character names (e.g., "Whiterun Guard 1" -> "Whiterun Guard")
-        base_name: str = utils.remove_trailing_number(npc_name)
-        name_ref: str = f'{base_name} - {npc_ref_id}'
-        
+        base_name: str = _safe_part(utils.remove_trailing_number(npc_name))
+        name_ref: str = f'{base_name} - {_safe_part(npc_ref_id)}'
+        world_id = _safe_part(world_id)
+
         def get_folder_path(folder_name: str) -> str:
             return os.path.join(self.__game.conversation_folder_path, world_id, folder_name).replace(os.sep, '/')
         

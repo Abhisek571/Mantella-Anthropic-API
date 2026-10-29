@@ -1,5 +1,5 @@
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, PlainTextResponse
 import webbrowser
 import gradio as gr
 from src.config.config_loader import ConfigLoader
@@ -9,6 +9,37 @@ import src.utils as utils
 import src.extensions as src_extensions
 
 logger = utils.get_logger()
+
+LOCAL_HOSTS = {'localhost', '127.0.0.1', '[::1]', '::1'}
+
+
+def _host_name(value: str) -> str:
+    """'localhost:4999' -> 'localhost', 'http://127.0.0.1:4999' -> '127.0.0.1', '[::1]:4999' -> '[::1]'."""
+    value = value.strip().lower().split('://', 1)[-1].split('/', 1)[0]
+    if value.startswith('['):
+        return value.split(']', 1)[0] + ']'
+    return value.rsplit(':', 1)[0] if value.count(':') == 1 else value
+
+
+def is_local_request(host: str | None, origin: str | None) -> bool:
+    """Only this PC may use the server. The game sends no Origin; a web page always does, so a page from any other
+    site can't change settings or read keys. Checking Host as well stops DNS rebinding (a site name that resolves
+    to 127.0.0.1)."""
+    if host and _host_name(host) not in LOCAL_HOSTS:
+        return False
+    if origin is not None and _host_name(origin) not in LOCAL_HOSTS:
+        return False
+    return True
+
+
+def add_local_only_guard(app: FastAPI) -> None:
+    @app.middleware("http")
+    async def local_only(request: Request, call_next):
+        if not is_local_request(request.headers.get('host'), request.headers.get('origin')):
+            logger.warning(f"Refused a request to {request.url.path} from Host '{request.headers.get('host')}', "
+                           f"Origin '{request.headers.get('origin')}': only this PC may use Mantella's server")
+            return PlainTextResponse('Forbidden: Mantella only accepts requests from this PC.', status_code=403)
+        return await call_next(request)
 
 
 class StartUI(routeable):
@@ -78,6 +109,8 @@ class StartUI(routeable):
 
     
     def add_route_to_server(self, app: FastAPI):
+        add_local_only_guard(app)
+
         @app.get("/favicon.ico")
         async def favicon():
             return FileResponse("Mantella.ico")
