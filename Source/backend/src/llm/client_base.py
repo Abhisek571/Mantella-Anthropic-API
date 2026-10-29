@@ -22,6 +22,25 @@ import src.extensions as src_extensions
 logger = utils.get_logger()
 
 
+def _tool_name(item) -> str:
+    """The name of an OpenAI-style tool or tool call, as a dict or an SDK object."""
+    function = item.get('function') if isinstance(item, dict) else getattr(item, 'function', None)
+    if function is None and isinstance(item, dict):
+        return item.get('name') or ''
+    return (function.get('name') if isinstance(function, dict) else getattr(function, 'name', '')) or ''
+
+
+def only_offered(tool_calls: list, tools: list | None) -> list:
+    """Drop tool calls for actions this request did not offer. Extensions hide actions per NPC (a stranger gets no
+    sex or follower actions); a model that names a hidden action anyway (an injected line, a guess) must not run it."""
+    offered = {_tool_name(t) for t in tools or []}
+    kept = [call for call in tool_calls if _tool_name(call) in offered]
+    for call in tool_calls:
+        if _tool_name(call) not in offered:
+            logger.warning(f"Ignored a call to action '{_tool_name(call)}': it was not offered for this reply")
+    return kept
+
+
 class VisionMode(Enum):
     """Vision operating modes for LLM image context"""
     DISABLED = "disabled" # No image client configured
@@ -328,7 +347,7 @@ class ClientBase(AIClient):
                     # Handle tool calling: use dedicated function client if available, otherwise use main LLM
                     if tools:
                         if self._function_client:
-                            pre_fetched_tool_calls = self._function_client.check_for_actions(messages, tools)
+                            pre_fetched_tool_calls = only_offered(self._function_client.check_for_actions(messages, tools) or [], tools)
                             if pre_fetched_tool_calls:
                                 yield ("tool_calls", pre_fetched_tool_calls)
                         else:
@@ -365,8 +384,9 @@ class ClientBase(AIClient):
                             if state.usage:
                                 extensions.record_usage({'time': time.time(), 'model': self.model_name, **state.usage,
                                                          'cost': anthropic_native.reply_cost(self.model_name, state.usage)})
-                            if state.tool_calls:
-                                yield ("tool_calls", list(state.tool_calls))
+                            offered_calls = only_offered(list(state.tool_calls), request_params.get("tools"))
+                            if offered_calls:
+                                yield ("tool_calls", offered_calls)
                             if state.got_text or state.tool_calls:
                                 if attempt > 0:
                                     logger.log(23, f"Empty-reply safety net: retry {attempt} succeeded")
@@ -438,8 +458,9 @@ class ClientBase(AIClient):
 
                         # After streaming completes, yield any accumulated tool calls
                         if accumulated_tool_calls:
-                            tool_calls_list = [accumulated_tool_calls[i] for i in sorted(accumulated_tool_calls.keys())]
-                            yield ("tool_calls", tool_calls_list)
+                            tool_calls_list = only_offered([accumulated_tool_calls[i] for i in sorted(accumulated_tool_calls.keys())], request_params.get("tools"))
+                            if tool_calls_list:
+                                yield ("tool_calls", tool_calls_list)
 
                         if got_content or accumulated_tool_calls:
                             if attempt > 0:

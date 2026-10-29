@@ -2,19 +2,19 @@
   "bases": {
     "b103fb5cbdfd9b3cb7bb1c157ad67bca1a1d8fcd554e76f2bd0ca5947d0757b1": {
       "name": "Mantella 0.14",
-      "patched_sha256": "c36d7bd445ddbabe83246a5666504cfaa9c342de86b75e9acbbc21709b073301"
+      "patched_sha256": "00279cc7e088d5498b6ac42e4d2368b65efb7d02632d174cbf9138e979126a2b"
     }
   },
   "modules": {
     "src.utils": "6cee1deb95dd67ae864baaae7d7cbaeefb8cecbb6750a7a170875d5f7df51640",
-    "src.llm.client_base": "d9ca91578a94283e65bbd72ada1bd54d27e6683c68c41ac7463848a7e6aab5b2",
+    "src.llm.client_base": "76e3b5116acf0963a0e5bc3005e339f8997ef4f600f2dd970d9eb357dc1ff093",
     "src.config.definitions.llm_definitions": "4e06b3bd00cc8c6f792639d8f0bcc7af3fde7bbf52f990cb87bd12a4bc4ba573",
     "src.config.definitions.vision_definitions": "dc4442abd6a0b9044daaaabfc08eaa0a13114598f5f2b69eace27bd460d2e060",
     "src.config.definitions.action_definitions": "fa9bc2fac7442292f50d476ade6495ec9739a6eb9e734db19e68c8722de1f136",
     "src.http.routes.mantella_route": "9c8d2f4b25ab417d527b6f55ae93a17eeac8d34996fc98337f02e904e478fa5c",
-    "src.remember.summaries": "f3847f45bd50c3067f202ddd6c8c40e217688db499048c6b04db75ae5f9e7b4a",
-    "src.ui.start_ui": "92e26c7d72099235058b1ae697f5d67c09b525b150aaf4ba9861c7f8d2fb26f9",
-    "src.conversation.conversation": "561351ebd9fcbcd2ee8a4da86e65b7f69391405dec425482033ba6b7813072f9",
+    "src.remember.summaries": "d8cf73221ed1ef64ef87279c40aaa208f9bae7d64f9b390a73ad398f8b89ca10",
+    "src.ui.start_ui": "3c018a25d8a4b656535fb869a84685c7f4d3ad0e5c55024e93e03b87b837c199",
+    "src.conversation.conversation": "bdad61becb4ed1a8a90271625d53bf0e02e0f9b9671543de9cd004bd42a9583a",
     "src.game_manager": "7e403a38f296254ecac9b7600360f1dd49f9817ce0f6f369b8131a67e1051090",
     "src.http.communication_constants": "885b58b4836b4c24ae709cf3da44de247ccefa1006aa6f319d9497d371416d13",
     "src.llm.anthropic_native": "f0f2cdf4b5e79df23dbec76f8d1e2b224d871388011687a09ac29a7a9ff8283f",
