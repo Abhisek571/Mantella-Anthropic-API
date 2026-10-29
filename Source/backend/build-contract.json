@@ -2,22 +2,22 @@
   "bases": {
     "b103fb5cbdfd9b3cb7bb1c157ad67bca1a1d8fcd554e76f2bd0ca5947d0757b1": {
       "name": "Mantella 0.14",
-      "patched_sha256": "725d7d13a156b756b67c2d62d5912c66bd6305857901db8db899346dd744f71c"
+      "patched_sha256": "715e4ba32b8c2d4d02dbeee3ca6dcf4a4ac87a9ab2633a545a95010733a200db"
     }
   },
   "modules": {
     "src.utils": "6cee1deb95dd67ae864baaae7d7cbaeefb8cecbb6750a7a170875d5f7df51640",
-    "src.llm.client_base": "7b20dcdea3cdb461ac4328ed22b2894f456387f28ead62d9123555daac98c327",
+    "src.llm.client_base": "b8db9bb40a77e99b40ab282b4221c84d8d7e2b13316eb8db085168fae50ff1c9",
     "src.config.definitions.llm_definitions": "4e06b3bd00cc8c6f792639d8f0bcc7af3fde7bbf52f990cb87bd12a4bc4ba573",
     "src.config.definitions.vision_definitions": "dc4442abd6a0b9044daaaabfc08eaa0a13114598f5f2b69eace27bd460d2e060",
     "src.config.definitions.action_definitions": "fa9bc2fac7442292f50d476ade6495ec9739a6eb9e734db19e68c8722de1f136",
     "src.http.routes.mantella_route": "9c8d2f4b25ab417d527b6f55ae93a17eeac8d34996fc98337f02e904e478fa5c",
-    "src.remember.summaries": "d8cf73221ed1ef64ef87279c40aaa208f9bae7d64f9b390a73ad398f8b89ca10",
+    "src.remember.summaries": "3eff48dc0bcab849a66f1be604a2ee2fb2a22e090a2c40dc42aa1377c29f73d7",
     "src.ui.start_ui": "3c018a25d8a4b656535fb869a84685c7f4d3ad0e5c55024e93e03b87b837c199",
-    "src.conversation.conversation": "bdad61becb4ed1a8a90271625d53bf0e02e0f9b9671543de9cd004bd42a9583a",
+    "src.conversation.conversation": "4a2b9f637b9b84acfb95343b72d7d0be7c02046260e482cf80d9e59ca6eb79de",
     "src.game_manager": "7e403a38f296254ecac9b7600360f1dd49f9817ce0f6f369b8131a67e1051090",
     "src.http.communication_constants": "885b58b4836b4c24ae709cf3da44de247ccefa1006aa6f319d9497d371416d13",
-    "src.llm.anthropic_native": "d32cab77a6128e52456e2844b3d5ca6724fe995a0ba01e1f1e82a584ab29364a",
+    "src.llm.anthropic_native": "a7f6a72aaf70748c3edecc88cf99b7bf8c42431944e410beff51a898d7e4818a",
     "src.extensions": "9ba2e1242b64a32182b4e934d3387338fb950127696f3e2590ee4510e8409365",
     "src.dual_input": "9bafc1b0490b4a29f1779976c4a50e43e70b44ac1c4d6fb7436501a381b3ad76"
   },

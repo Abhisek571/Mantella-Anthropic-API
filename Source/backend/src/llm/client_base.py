@@ -418,9 +418,9 @@ class ClientBase(AIClient):
                                     logger.log(23, f"Empty-reply safety net: retry {attempt} succeeded")
                                 break
                             if attempt < self.EMPTY_REPLY_RETRIES:
-                                logger.warning(f"Empty-reply safety net: the LLM returned nothing (stop_reason={state.stop_reason}), retrying ({attempt + 1}/{self.EMPTY_REPLY_RETRIES})...")
+                                logger.warning(f"Empty-reply safety net: the LLM returned nothing (stop_reason={state.stop_reason}, stop_sequence={state.stop_sequence!r}), retrying ({attempt + 1}/{self.EMPTY_REPLY_RETRIES})...")
                             else:
-                                logger.warning(f"Empty-reply safety net: still nothing after {self.EMPTY_REPLY_RETRIES} retries (stop_reason={state.stop_reason})")
+                                logger.warning(f"Empty-reply safety net: still nothing after {self.EMPTY_REPLY_RETRIES} retries (stop_reason={state.stop_reason}, stop_sequence={state.stop_sequence!r})")
                             continue
 
                         # Create async client for main LLM streaming (after function client has run if applicable)

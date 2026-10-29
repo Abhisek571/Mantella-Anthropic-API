@@ -23,16 +23,20 @@ DEFAULT_MAX_TOKENS = 250
 NATIVE_PARAMS = ('max_tokens', 'thinking', 'output_config', 'stop_sequences', 'metadata', 'service_tier')
 
 
-def split_params(request_params: dict[str, Any] | None) -> tuple[dict[str, Any], list[str]]:
+def split_params(request_params: dict[str, Any] | None, model: str = '') -> tuple[dict[str, Any], list[str]]:
     """Turns Mantella's LLM parameters (OpenAI style, with Anthropic extras in extra_body) into Messages API fields.
     Returns (fields, names of ignored parameters)."""
     fields: dict[str, Any] = {}
     ignored: list[str] = []
+    reasoning_off = False
     for key, value in (request_params or {}).items():
         if key == 'extra_body' and isinstance(value, dict):
             for extra_key, extra_value in value.items():
                 if extra_key in NATIVE_PARAMS:
                     fields[extra_key] = extra_value
+                elif extra_key == 'reasoning' and isinstance(extra_value, dict):
+                    # OpenRouter's switch; Mantella configs carry it over when the service changes
+                    reasoning_off = extra_value.get('enabled') is False or extra_value.get('effort') == 'none'
                 else:
                     ignored.append('extra_body.' + extra_key)
         elif key == 'max_completion_tokens':
@@ -46,7 +50,48 @@ def split_params(request_params: dict[str, Any] | None) -> tuple[dict[str, Any],
         elif key not in ('tools', 'stream'):
             ignored.append(key)
     fields.setdefault('max_tokens', DEFAULT_MAX_TOKENS)
+    if model:
+        fit_thinking(fields, model, reasoning_off)
     return fields, ignored
+
+
+def thinking_off(model: str) -> dict[str, str] | None:
+    """The setting that turns thinking off on this model, or None where it cannot be turned off."""
+    if model.startswith(('claude-opus-5-5', 'claude-fable', 'claude-mythos')):
+        return None
+    if model.startswith('claude-sonnet-5-5'):
+        return {'type': 'between_tools'}  # Sonnet 5.5 rejects "disabled"
+    return {'type': 'disabled'}  # Haiku 5.5 and the rest reject "between_tools"
+
+
+_told_thinking: set[str] = set()
+
+
+def fit_thinking(fields: dict[str, Any], model: str, reasoning_off: bool):
+    """Current Claude models think by default, and the hidden thinking is billed and counts toward max_tokens
+    (a 500-token limit can end with no spoken line). When the player turned thinking off, either with
+    OpenRouter's reasoning switch or with a thinking-off line written for another model, send the form this
+    model accepts instead of a request that fails with error 400."""
+    thinking = fields.get('thinking')
+    if isinstance(thinking, dict) and thinking.get('type') in ('disabled', 'between_tools'):
+        reasoning_off = True
+    elif thinking is not None or not reasoning_off:
+        return  # thinking on, as set or by default
+    off = thinking_off(model)
+    output_config = dict(fields.get('output_config') or {})
+    if off is None:
+        fields.pop('thinking', None)
+        output_config.setdefault('effort', 'low')  # the least thinking this model allows
+    else:
+        fields['thinking'] = off
+        if output_config.get('effort') in ('xhigh', 'max'):  # thinking off is only accepted up to high
+            output_config['effort'] = 'high'
+    if output_config:
+        fields['output_config'] = output_config
+    if model not in _told_thinking:
+        _told_thinking.add(model)
+        logger.log(23, f"Anthropic (Native): thinking off for {model}: "
+                       + (f"sending thinking {off['type']}" if off else f"it cannot be turned off, using effort {output_config['effort']}"))
 
 
 def split_entity_lists(tools: list[dict] | None) -> tuple[list[dict] | None, str]:
@@ -297,7 +342,7 @@ def build_request(model: str, openai_messages: list[dict], request_params: dict[
                   system_parts: Callable[[dict[str, str]], dict[str, str]] | None = None) -> dict[str, Any]:
     """Keyword arguments for client.messages.create(). extra_texts go into the newest message after the cache
     point; system_parts (from an extension) splits the system prompt and places its cache point."""
-    fields, ignored = split_params(request_params)
+    fields, ignored = split_params(request_params, model)
     if ignored:
         logger.debug(f"Anthropic (Native): ignoring parameters the Messages API does not take: {', '.join(ignored)}")
     system, messages = convert_messages(openai_messages, thinking_by_tool_call)
@@ -387,6 +432,7 @@ class StreamState:
         self.tool_calls: list[dict] = []
         self.thinking: list[dict] = []
         self.stop_reason: str | None = None
+        self.stop_sequence: str | None = None
         self.got_text = False
         self.fell_back_to: str | None = None
         self.usage: dict | None = None
@@ -438,6 +484,7 @@ class StreamState:
                 self.thinking.append({'type': 'thinking', 'thinking': block['thinking'], 'signature': block['signature']})
         elif kind == 'message_delta':
             self.stop_reason = _field(_field(event, 'delta'), 'stop_reason') or self.stop_reason
+            self.stop_sequence = _field(_field(event, 'delta'), 'stop_sequence') or self.stop_sequence
             output = _field(_field(event, 'usage'), 'output_tokens')
             if self.usage is not None and output is not None:
                 self.usage['output'] = output
