@@ -1,7 +1,7 @@
-Mantella - Direct AI Connect v1.0
+Mantella - Direct AI Connect v1.1
 
-Unofficial modification to Mantella, dated 2026-10-21: adds Anthropic (Official) as an
-LLM service. Not endorsed by the Mantella authors or by Anthropic.
+Unofficial modification to Mantella 0.14: adds Anthropic (Native, cached) and Anthropic
+(Official) as LLM services, extensions support, and Dual Input. Not endorsed by the Mantella authors or by Anthropic.
 
 LICENSES
 Backend patch source, setup_backend.py and frozen_patch.py are distributed under
@@ -11,7 +11,7 @@ Original upstream terms and notices apply. frozen_patch.py and the Dual Input ba
 src/http/communication_constants.py) come from Mantella Dual Input 1.1
 (https://github.com/Abhisek571/Mantella-Dual-Input), same author, same license.
 The game scripts in Scripts/ (MantellaConversation, MantellaRepository, MantellaMCM,
-MantellaMCM_GeneralSettings) are Mantella Dual Input 1.1's, unchanged; they keep Mantella's
+MantellaMCM_GeneralSettings) are based on Mantella Dual Input 1.1, modified; they keep Mantella's
 MIT license. See Licenses/Mantella-Game-LICENSE.txt.
 
 BUNDLED THIRD-PARTY PACKAGES
@@ -21,7 +21,8 @@ patched executable:
   MIT License, Copyright 2023 Anthropic, PBC. See Source/backend/vendor/licenses/anthropic-LICENSE.
 - docstring_parser 0.18.0 (https://github.com/rr-/docstring_parser), MIT License,
   Copyright (c) 2018 Marcin Kurczewski. See Source/backend/vendor/licenses/docstring_parser-LICENSE.md.
-src/llm/anthropic_native.py is new in this patch (no upstream counterpart).
+src/llm/anthropic_native.py, src/extensions.py and src/dual_input.py are new in this patch
+(no upstream counterpart).
 
 UPSTREAM SOURCE
 Backend baseline: Mantella v0.14
