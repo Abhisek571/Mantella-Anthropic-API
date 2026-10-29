@@ -1,43 +1,31 @@
 # Mantella - Direct AI Connect
 
-Adds **Anthropic (Official)** as an LLM service in [Mantella](https://www.nexusmods.com/skyrimspecialedition/mods/98631), so Claude models can be used with your own Anthropic API key instead of through OpenRouter.
+A patched Mantella.exe for [Mantella](https://www.nexusmods.com/skyrimspecialedition/mods/98631) 0.14: Claude straight from Anthropic with prompt caching, Dual Input built in, and the server side of Mantella Living World.
 
-For **Mantella 0.14**. Includes **Mantella Dual Input 1.1** (type or speak in the same conversation), so the separate Dual Input mod is no longer needed.
-
-## Features
-
-- **Anthropic (Official)** in the LLM Service dropdowns: conversation, summary, vision and tool-calling LLMs.
-- **Anthropic (Native, cached)** for conversations and summaries: Anthropic's own Messages API with prompt caching, so the repeated part of each prompt (bios, memories, earlier lines) costs about a tenth after the first reply. Declined replies fall back to another Claude model on Opus 5.5, Sonnet 5.5 and Fable 5.1.
-- The model list is read live from Anthropic and shows each model's name, context size and capabilities.
-- Its own key file, `ANTHROPIC_SECRET_KEY.txt`, next to `GPT_SECRET_KEY.txt`. It never falls back to the other key, so you can mix services, for example Claude for conversations and OpenRouter for summaries.
-- `temperature`, `top_p`, `top_k` and the OpenRouter `provider` block are dropped for Anthropic requests, since current Claude models reject them.
-- **Dual Input** built in: separate keys to type or speak a reply (Mantella's MCM, General page).
-- "Goodbye, <name>" in a one-on-one conversation now ends it. In Mantella 0.14 it left the conversation waiting forever.
+| Feature | What it does |
+|---|---|
+| Anthropic (Native, cached) | Anthropic's own Messages API with prompt caching: the repeated part of each prompt (bios, memories, earlier lines) costs a tenth or less after the first reply (conversations only). If Claude declines a reply, Opus 5.5, Sonnet 5.5 and Fable 5.1 retry with another Claude model; Haiku has no fallback |
+| Anthropic (Official) | Anthropic's OpenAI-compatible endpoint, for the vision and tool-calling LLMs too (no caching there) |
+| Live model list | Each model's name, context size and capabilities, read from Anthropic |
+| Own key file | `ANTHROPIC_SECRET_KEY.txt`, next to `GPT_SECRET_KEY.txt`; never mixed up, so Claude for talks and OpenRouter for summaries works |
+| Dual Input | Based on Mantella Dual Input 1.1 (modified), built in: separate keys to type or speak a reply. Off by default; enable it and set the keys in Mantella's MCM, General page (Speak Reply is V by default). Speak Reply needs Mantella's speech-to-text working (model downloaded, microphone allowed); the speech model loads on the first Speak Reply, and with no microphone the turn counts as no speech |
+| Extensions | Runs the Python parts of Mantella Living World, from the `extensions` folder next to Mantella.exe (settings tab, memory, prompt rules, action gates, knowledge). The Living World tab only appears when Mantella Living World - Integration Hub or Mantella Living World - Knowledge is installed. Extensions can also shape the prompt, tool list, summaries and memory for any LLM service, and NPCs can answer in-game events without the player speaking |
+| Fixes | "Goodbye, <name>" ends a one-on-one talk; unsupported sampling settings are dropped for Claude; a streamed reply with no text and no action is retried up to 2 times, on every LLM service; the player description typed in the settings page wins over the MCM one; summary and conversation folder names are made safe |
+| Cost log | On Anthropic (Native, cached), each reply's token use (cache read, cache write, uncached, output) and dollar cost is logged for extensions |
+| Safety | Mantella's settings server answers only this PC; the model can only run actions it was offered, and keyword actions ("Name: ...") follow the same rule |
 
 ## Install
 
-1. Download the ZIP from [Releases](https://github.com/Abhisek571/Mantella-Direct-AI-Connect/releases/latest) or [Nexus Mods](https://www.nexusmods.com/skyrimspecialedition/mods/196214) and install it as a separate MO2 mod.
-2. Open the mod folder and run **Setup Backend.cmd** with **Python 3.11** installed. It patches Mantella 0.14's own Mantella.exe.
-3. Place the mod after (below) Mantella in MO2's left pane and enable it. If you have the separate Mantella Dual Input mod, disable it.
-4. Put your Anthropic API key in `ANTHROPIC_SECRET_KEY.txt` in the main Mantella mod folder.
-5. In the Mantella UI, set **LLM Service** to **Anthropic (Native, cached)** (or **Anthropic (Official)**), press **Update** and pick a model.
+1. Download the ZIP from [Nexus Mods](https://www.nexusmods.com/skyrimspecialedition/mods/196214) or the GitHub [Releases](https://github.com/Abhisek571/Mantella-Anthropic-API/releases/latest) page (the repo keeps its old name) and install it as a separate MO2 mod.
+2. Run **Setup Backend.cmd** in the mod folder, with **Python 3.11** from python.org installed, including its Python launcher so `py -3.11` works (a uv-managed Python is not found). It builds a patched copy of Mantella 0.14's own Mantella.exe; it does not take the Dual Input exe.
+3. Place the mod below Mantella in MO2's left pane, so its Mantella.exe and its `Scripts` win, and enable it. Disable the separate Mantella Dual Input mod if you have it.
+4. Put your Anthropic API key in `ANTHROPIC_SECRET_KEY.txt` in the main Mantella mod folder. Under MO2 it must sit where Mantella.exe is shown, or in the working directory. A `secret_keys.json` there is read first.
+5. In the Mantella UI, set **LLM Service** to **Anthropic (Native, cached)**, press **Update** and pick a model.
 
-See [INSTALL.txt](INSTALL.txt) for details, faster replies (turning thinking off) and removal.
+[INSTALL.txt](INSTALL.txt) covers faster replies (thinking off) and removal.
 
-**Limits:** Anthropic (Official) uses Anthropic's OpenAI-compatible endpoint, which has no prompt caching. Vision and tool-calling LLMs offer only Anthropic (Official).
+Requires: [Mantella](https://www.nexusmods.com/skyrimspecialedition/mods/98631) 0.14 (exactly), Python 3.11 from python.org (setup only), an Anthropic API key (billed by Anthropic). Disable the separate Mantella Dual Input mod. Optional: Mantella Living World - Integration Hub and Mantella Living World - Knowledge. Living World actions that need Mantella's Advanced Actions only work with it on. The SDK is bundled, so no pip install is needed.
 
-## Build
+Build: `py -3.11 setup_backend.py --base "C:\path\to\Mantella.exe"`. It checks the input exe hash, that each replaced module is still stock Mantella 0.14 (`Source/upstream`), and the source and output hashes in `Source/backend/build-contract.json`. Changed modules: `utils`, `llm/client_base`, `config/definitions/llm_definitions`, `vision_definitions`, `action_definitions`, `http/routes/mantella_route`, `http/communication_constants`, `remember/summaries`, `ui/start_ui`, `conversation/conversation`, `game_manager`. Added: `llm/anthropic_native`, `extensions`, `dual_input`, plus the vendored [Anthropic Python SDK](https://github.com/anthropics/anthropic-sdk-python) 0.125.0 and `docstring_parser` 0.18.0 (both MIT). Tests: `py -3.11 Source/backend/tests/test_<name>.py Source/backend` (`dual_input`, `extensions`, `native`, `safety`, `setup`).
 
-Requires CPython 3.11 and a supported `Mantella.exe` (hashes in `Source/backend/build-contract.json`).
-
-```bat
-py -3.11 setup_backend.py --base "C:\path\to\Mantella.exe"
-```
-
-The build checks the input exe hash, that each replaced module is still stock Mantella v0.14 (`Source/upstream`), the source hashes and the output hash.
-
-Changed modules: `src/utils.py`, `src/llm/client_base.py`, `src/config/definitions/llm_definitions.py`, `vision_definitions.py`, `action_definitions.py`, `src/http/routes/mantella_route.py`. Added: `src/llm/anthropic_native.py`, plus the vendored [Anthropic Python SDK](https://github.com/anthropics/anthropic-sdk-python) 0.125.0 and `docstring_parser` 0.18.0 (both MIT, in `Source/backend/vendor`). Their other dependencies already ship inside Mantella.exe.
-
-## Source and license
-
-Unofficial patch of [Mantella](https://github.com/art-from-the-machine/Mantella), under **AGPL-3.0-or-later**. See [SOURCE-AND-LICENSES.txt](SOURCE-AND-LICENSES.txt). No Mantella executable, voice models, personal configuration or API keys are bundled.
+License: GNU AGPL-3.0-or-later. An unofficial patch of [Mantella](https://github.com/art-from-the-machine/Mantella); see [SOURCE-AND-LICENSES.txt](SOURCE-AND-LICENSES.txt). No Mantella executable, voice models, personal settings or API keys are bundled.

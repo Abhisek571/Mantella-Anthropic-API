@@ -1,17 +1,22 @@
-MANTELLA - ANTHROPIC API — v1.0
+MANTELLA - DIRECT AI CONNECT — v1.1
 
-Adds "Anthropic (Official)" as an LLM service in Mantella, so Claude models can be used
-with your own Anthropic API key, without going through OpenRouter.
+Adds "Anthropic (Native, cached)" and "Anthropic (Official)" as LLM services in Mantella, so
+Claude models can be used with your own Anthropic API key, without going through OpenRouter.
+It also carries Dual Input and the server side of Mantella Living World.
 This is an unofficial patch. Install Mantella and make sure normal conversations work first.
 
 REQUIREMENTS
 Mantella 0.14 (Nexus release) for Skyrim SE, working, with all of its requirements.
-Mantella Dual Input 1.1 is included (type or speak in the same conversation). Disable the
-separate Mantella Dual Input mod if you have it.
+Dual Input (based on Mantella Dual Input 1.1, modified) is included: type or speak in the same
+conversation. Disable the separate Mantella Dual Input mod if you have it. Setup patches the
+plain Mantella 0.14 exe, not the Dual Input exe.
+Optional: Mantella Living World - Integration Hub and Mantella Living World - Knowledge. The
+Living World settings tab only appears when one of them is installed.
 An Anthropic API key: https://platform.claude.com/settings/keys (API usage is billed by Anthropic).
 Python 3.11 is needed ONCE to prepare the backend.
 Use the official Windows Python 3.11 installer from https://www.python.org/downloads/windows/
-Install its Python launcher so the command "py -3.11" works. No pip packages are required.
+Install its Python launcher so the command "py -3.11" works (a uv/Astral-managed Python 3.11
+is not found). No pip packages are required; the Anthropic SDK is bundled.
 
 Setup checks the exact executable hash, not just its version label. Supported:
 Mantella 0.14              b103fb5cbdfd9b3cb7bb1c157ad67bca1a1d8fcd554e76f2bd0ca5947d0757b1
@@ -24,14 +29,15 @@ INSTALL WITH MO2
    asks, paste the full path to that Mantella.exe, normally inside the Mantella mod at
    SKSE\Plugins\MantellaSoftware\Mantella.exe. Do not select this patch's own copy.
 4. Wait for "backend ready". In MO2's left pane, place this mod BELOW Mantella so it has
-   higher priority and its Mantella.exe and scripts win. Enable it. Disable the separate
+   higher priority and its Mantella.exe and its Scripts folder win. Enable it. Disable the separate
    Mantella Dual Input mod if you have it (this patch includes it).
 5. Create a text file named ANTHROPIC_SECRET_KEY.txt in the same folder as your
    GPT_SECRET_KEY.txt (the main Mantella mod folder) and paste your Anthropic API key on
-   the first line.
+   the first line. Under MO2 the file must be in the folder where MO2 shows Mantella.exe, or in
+   the working directory. A secret_keys.json in the same place is read first.
 6. Start Mantella, open the Mantella UI (http://localhost:4999/ui), go to the
-   Large Language Model tab, set LLM Service to "Anthropic (Official)", press Update and
-   choose a model. Start a NEW conversation.
+   Large Language Model tab, set LLM Service to "Anthropic (Native, cached)" (or "Anthropic (Official)"),
+   press Update and choose a model. Start a NEW conversation.
 
 If setup says "unsupported", STOP. Do not edit the hash check or overwrite the original.
 If Python is missing, install Python 3.11 and rerun Setup Backend.cmd.
@@ -48,7 +54,8 @@ Parameters for Anthropic requests (current Claude models reject them). Mantella'
 which ones were ignored.
 
 Faster replies: current Claude models think before answering. To turn that off, put this
-in LLM Parameters (Large Language Model tab, Advanced):
+in LLM Parameters (Large Language Model tab, Advanced). These two lines are for those two
+models only; other models (Opus, Fable) need nothing here:
   Claude Haiku 5.5:   "extra_body": {"thinking": {"type": "disabled"}}
   Claude Sonnet 5.5:  "extra_body": {"thinking": {"type": "between_tools"}}
 Example for Haiku:
@@ -64,17 +71,30 @@ LIMITS
 Anthropic (Official) uses Anthropic's OpenAI-compatible endpoint. It does not support prompt
 caching, so every reply resends the whole prompt (bios, memories, history) at the normal input
 price. Anthropic (Native, cached) uses Anthropic's own API with caching: after the first reply,
-the repeated part of the prompt is read from the cache at about a tenth of the price. It is
+the repeated part of the prompt is read from the cache at a tenth of the price or less. If
+Claude declines a reply, Opus 5.5, Sonnet 5.5 and Fable 5.1 retry with another Claude model;
+Haiku has no fallback. It is
 offered for conversations and summaries; vision and tool-calling LLMs use Anthropic (Official).
 Claude models may refuse some content that other models allow.
 Tested on one Windows setup; not broadly tested.
 
 DUAL INPUT AND GOODBYES
-Dual Input 1.1 is part of this patch: in Mantella's MCM (General page), enable Dual Input
-and set the Type Reply and Speak Reply keys. Its game scripts (MantellaConversation,
-MantellaRepository, MantellaMCM, MantellaMCM_GeneralSettings) ship in Scripts\.
+Dual Input is part of this patch. It is off by default: in Mantella's MCM (General page),
+enable it and set the Type Reply and Speak Reply keys (Speak Reply is V by default). Speak Reply
+needs Mantella's speech-to-text to work (model downloaded, microphone allowed); the speech model
+loads on the first Speak Reply, and with no microphone the turn counts as no speech. Its game scripts (MantellaConversation,
+MantellaRepository, MantellaMCM, MantellaMCM_GeneralSettings) ship in Scripts\ and must win over Mantella's, so keep this mod
+below Mantella.
 "Goodbye, <name>" in a one-on-one conversation ends it; in Mantella 0.14 it removed the only
 NPC and the conversation never ended.
+
+OTHER BEHAVIOUR
+A streamed reply with no text and no action is retried up to 2 times, on every LLM service.
+Mantella's settings server only answers this PC. The model can only run actions it was offered;
+keyword actions follow the same rule. The player description typed in the settings page wins
+over the MCM one. Summary and conversation folder names are made safe. Living World actions
+that need Mantella's Advanced Actions only work with it on (Actions tab of Mantella's settings).
+On Anthropic (Native, cached) each reply's token use and cost is logged for extensions.
 
 PUBLIC PACKAGE
 This download contains the backend patch source and the setup tool. It does not contain
