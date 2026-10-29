@@ -63,5 +63,40 @@ for odd in ('../../x', '..\\..\\x', 'a/b', 'Jarl: Balgruuf', 'Who?', '', '. '):
     out = safe(odd)
     check(f'odd name made safe: {odd!r} -> {out!r}', out and not re.search(r'[<>:"/\\|?*]', out) and '..' not in out and not out.endswith(('.', ' ')))
 
+# test_key_file_variants (DACN-05): key files saved by Notepad (BOM), PowerShell 5.1 `>` (UTF-16), with quotes or
+# a blank first line give the key itself, not BOM bytes, quotes or nothing.
+import codecs, json, locale, tempfile
+kf = load('src/llm/client_base.py', {'read_key_text', 'clean_key'}, {'codecs': codecs, 'locale': locale, 'Path': Path})
+KEY = 'sk-ant-api03-EXAMPLEKEY'
+variants = {
+    'plain': (KEY + '\n').encode(),
+    'utf8_bom': codecs.BOM_UTF8 + KEY.encode() + b'\r\n',
+    'utf16_ps_redirect': (KEY + '\r\n').encode('utf-16'),
+    'utf16_be_bom': codecs.BOM_UTF16_BE + (KEY + '\r\n').encode('utf-16-be'),
+    'quoted': ('"' + KEY + '"\r\n').encode(),
+    'single_quoted': ("  '" + KEY + "'  \r\n").encode(),
+    'trailing_newline': (KEY + '\r\n\r\n').encode(),
+    'leading_blank_line': ('\r\n   \r\n' + KEY + '\r\n').encode(),
+}
+with tempfile.TemporaryDirectory() as tmp:
+    for name, data in variants.items():
+        path = Path(tmp) / name
+        path.write_bytes(data)
+        try:
+            got = kf['clean_key'](kf['read_key_text'](path))
+        except Exception as e:
+            got = repr(e)
+        check(f'key file {name}', got == KEY, got)
+    for name, data in {'json_bom': codecs.BOM_UTF8 + b'{"Anthropic": "' + KEY.encode() + b'"}',
+                       'json_utf16': ('{"Anthropic": "' + KEY + '"}').encode('utf-16')}.items():
+        path = Path(tmp) / (name + '.json')
+        path.write_bytes(data)
+        try:
+            got = kf['clean_key'](json.loads(kf['read_key_text'](path))['Anthropic'])
+        except Exception as e:
+            got = repr(e)
+        check(f'secret_keys.json {name}', got == KEY, got)
+check('blank file gives no key', 'clean_key' in kf and kf['clean_key']('\r\n  \n') == '')
+
 print('RESULT: ' + ('ALL PASS' if not FAILS else f'{len(FAILS)} FAILED: {FAILS}'))
 sys.exit(1 if FAILS else 0)

@@ -97,6 +97,23 @@ def same_code_ignoring_jumps(left, right):
     return True
 
 
+ANTIVIRUS_HINT = ('This is usually antivirus (for example Windows Defender) removing or blocking the new file. '
+                  'Allow Mantella.exe in this mod folder in your antivirus, then run Setup Backend.cmd again.')
+
+
+def check_written(output, data):
+    """Reads the written exe back: it must be there with the size and SHA-256 of the build."""
+    import hashlib
+    output = Path(output)
+    try:
+        written = output.read_bytes()
+    except OSError:
+        raise ValueError(f'Mantella.exe was written but is now missing or cannot be read: {output}. ' + ANTIVIRUS_HINT)
+    if len(written) != len(data) or hashlib.sha256(written).digest() != hashlib.sha256(data).digest():
+        raise ValueError(f'Mantella.exe on disk is not the file setup just wrote ({len(written):,} of '
+                         f'{len(data):,} bytes, or different content): {output}. ' + ANTIVIRUS_HINT)
+
+
 def build(base, output, root=ROOT, write_contract=False):
     if sys.version_info[:2] != (3, 11):
         raise ValueError('Use Python 3.11 to match the Mantella runtime.')
@@ -161,8 +178,11 @@ def build(base, output, root=ROOT, write_contract=False):
         with os.fdopen(fd, 'wb') as stream:
             stream.write(data)
         Path(temporary).replace(output)
+    except FileNotFoundError:
+        raise ValueError(f'The new Mantella.exe disappeared while it was being written to {output}. ' + ANTIVIRUS_HINT)
     finally:
         Path(temporary).unlink(missing_ok=True)
+    check_written(output, data)
     report['base_name'] = contract['bases'][base_hash]['name']
     return report
 

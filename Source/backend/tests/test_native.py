@@ -45,6 +45,20 @@ u = conv[2]['content']
 check('tool_result first in user turn', [b['type'] for b in u] == ['tool_result', 'text', 'image'], u)
 check('image converted', u[2]['source'] == {'type': 'base64', 'media_type': 'image/jpeg', 'data': 'QUJD'}, u[2])
 check('empty assistant dropped', conv[-1]['role'] == 'user')
+# test_only_latest_tool_turn_replays_thinking (DACN-01): a replayed thinking block is rejected once anything before
+# it changed, and only the tool-use turn being continued needs its thinking, so earlier turns carry none.
+think = lambda n: [{'type': 'thinking', 'thinking': 'plan ' + n, 'signature': 'sig' + n}]
+call = lambda i: {'role': 'assistant', 'content': None, 'tool_calls': [{'id': i, 'type': 'function', 'function': {'name': 'FollowMe', 'arguments': '{}'}}]}
+three_turns = [{'role': 'system', 'content': 'You are Vega.'},
+               {'role': 'user', 'content': 'Follow me.'}, call('call_a'), {'role': 'tool', 'tool_call_id': 'call_a', 'content': 'done'},
+               {'role': 'assistant', 'content': 'Lead on.'},
+               {'role': 'user', 'content': 'Wait here.'}, {'role': 'assistant', 'content': 'As you wish.'},
+               {'role': 'user', 'content': 'Follow me again.'}, call('call_b'), {'role': 'tool', 'tool_call_id': 'call_b', 'content': 'done'}]
+_, conv3 = native.convert_messages(three_turns, {'call_a': think('a'), 'call_b': think('b')})
+with_thinking = [i for i, m in enumerate(conv3) if any(b['type'] == 'thinking' for b in m['content'])]
+check('only the last tool-call turn carries thinking', with_thinking == [len(conv3) - 2] and conv3[-2]['content'][0] == think('b')[0], [(m['role'], [b['type'] for b in m['content']]) for m in conv3])
+_, conv4 = native.convert_messages(three_turns + [{'role': 'assistant', 'content': 'Coming.'}, {'role': 'user', 'content': 'Good.'}], {'call_a': think('a'), 'call_b': think('b')})
+check('finished tool turn: no thinking replayed', not any(b['type'] == 'thinking' for m in conv4 for b in m['content']), conv4)
 _, conv2 = native.convert_messages([{'role': 'assistant', 'content': 'Hi'}], {})
 check('leading assistant gets a user turn', conv2[0]['role'] == 'user')
 
@@ -219,13 +233,14 @@ FALLBACK = [start(model='claude-sonnet-5'),
 
 REFUSAL = [start(), ] + stop('refusal')
 
-async def run(events, store):
+async def run(events, store, extra_texts=None):
     SCENARIO['events'] = events
     client = anthropic.AsyncAnthropic(api_key='test-key', base_url=BASE, max_retries=0)
     state = native.StreamState()
     texts = []
     try:
-        request = native.build_request('claude-sonnet-5-5', msgs[:2], {'extra_body': {'thinking': {'type': 'between_tools'}}}, tools, store, cache=True)
+        request = native.build_request('claude-sonnet-5-5', msgs[:2], {'extra_body': {'thinking': {'type': 'between_tools'}}}, tools, store, cache=True,
+                                        extra_texts=extra_texts)
         async for t in native.stream_reply(client, request, store, state):
             texts.append(t)
     finally:
@@ -237,7 +252,19 @@ texts, state = asyncio.run(run(TEXT_AND_TOOL, store))
 check('text streamed', ''.join(texts) == 'Lead the way. I am right behind you.', texts)
 check('tool call assembled', state.tool_calls == [{'id': 'toolu_9', 'type': 'function', 'function': {'name': 'FollowMe', 'arguments': '{"target": "Vega"}'}}], state.tool_calls)
 check('stop reason', state.stop_reason == 'tool_use')
-check('thinking stored by tool call', store.get('toolu_9') == [{'type': 'thinking', 'thinking': 'Plan: follow.', 'signature': 'SIG'}], store)
+check('thinking stored by tool call', (store.get('toolu_9') if isinstance(store.get('toolu_9'), dict) else {}).get('thinking') == [{'type': 'thinking', 'thinking': 'Plan: follow.', 'signature': 'SIG'}], store)
+# test_thinking_dropped_when_prefix_changed (DACN-01): the continuation keeps the block only while system, tools and
+# the earlier messages are what the block was made with; a per-request note moving to the newest message changes them.
+follow_up = msgs[:2] + [{'role': 'assistant', 'content': None, 'tool_calls': state.tool_calls},
+                        {'role': 'tool', 'tool_call_id': 'toolu_9', 'content': 'done'}]
+same = native.build_request('claude-sonnet-5-5', follow_up, None, tools, store, cache=True)
+check('unchanged prefix: thinking replayed', [b['type'] for b in same['messages'][-2]['content']][:1] == ['thinking'], same['messages'][-2])
+scene_store = {}
+asyncio.run(run(TEXT_AND_TOOL, scene_store, ['Current scene: Riverwood.']))
+moved = native.build_request('claude-sonnet-5-5', follow_up, None, tools, scene_store, cache=True, extra_texts=['Current scene: Riverwood.'])
+check('scene note moved off the earlier message: thinking dropped', [b['type'] for b in moved['messages'][-2]['content']] == ['tool_use'], moved['messages'][-2])
+no_tools = native.build_request('claude-sonnet-5-5', follow_up, None, None, store, cache=True)
+check('tools changed: thinking dropped', [b['type'] for b in no_tools['messages'][-2]['content']] == ['tool_use'], no_tools['messages'][-2])
 r = REQUESTS[-1]
 check('native path', r['path'] == '/v1/messages', r['path'])
 check('api key header', r['headers'].get('x-api-key') == 'test-key')

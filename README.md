@@ -22,7 +22,7 @@ A patched Mantella.exe for [Mantella](https://www.nexusmods.com/skyrimspecialedi
 4. Put your Anthropic API key in `ANTHROPIC_SECRET_KEY.txt` in the main Mantella mod folder. Under MO2 it must sit where Mantella.exe is shown, or in the working directory. A `secret_keys.json` there is read first.
 5. In the Mantella UI, set **LLM Service** to **Anthropic (Native, cached)**, press **Update** and pick a model.
 
-[INSTALL.txt](INSTALL.txt) covers faster replies (thinking off) and removal.
+Claude's thinking counts toward `max_tokens`, so with thinking on (always on Opus and Fable) raise Mantella's default 250 to about 2000 in LLM Parameters. The thinking-off lines in [INSTALL.txt](INSTALL.txt) each work on one model only and make every reply fail on any other model, so remove them before switching. INSTALL.txt also covers antivirus and removal.
 
 Requires: [Mantella](https://www.nexusmods.com/skyrimspecialedition/mods/98631) 0.14 (exactly), Python 3.11 from python.org (setup only), an Anthropic API key (billed by Anthropic). Disable the separate Mantella Dual Input mod. Optional: Mantella Living World - Integration Hub and Mantella Living World - Knowledge. Living World actions that need Mantella's Advanced Actions only work with it on. The SDK is bundled, so no pip install is needed.
 
