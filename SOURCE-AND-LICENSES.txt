@@ -1,4 +1,4 @@
-Mantella - Direct AI Connect v1.1
+Mantella - Direct AI Connect v1.2
 
 Unofficial modification to Mantella 0.14: adds Anthropic (Native, cached) and Anthropic
 (Official) as LLM services, extensions support, and Dual Input. Not endorsed by the Mantella authors or by Anthropic.

@@ -79,6 +79,26 @@ check('no fallbacks for haiku', 'extra_headers' not in req_h and 'fallbacks' not
 check('no cache when off', 'cache_control' not in req_h['system'][-1] and 'extra_body' not in req_h)
 check('default max_tokens', req_h['max_tokens'] == native.DEFAULT_MAX_TOKENS)
 
+# ---------- thinking off: each model gets the form it accepts (no thinking setting = hidden, billed thinking) ----------
+def thinking_fields(model, params):
+    return native.split_params(params, model)[0]
+off_or = {'max_tokens': 500, 'extra_body': {'reasoning': {'enabled': False}, 'provider': {'x': 1}}}
+check('reasoning off -> sonnet 5.5 between_tools', thinking_fields('claude-sonnet-5-5', off_or).get('thinking') == {'type': 'between_tools'})
+check('reasoning off -> haiku 5.5 disabled', thinking_fields('claude-haiku-5-5', off_or).get('thinking') == {'type': 'disabled'})
+f_opus = thinking_fields('claude-opus-5-5', off_or)
+check('reasoning off -> opus 5.5 low effort, no thinking field', 'thinking' not in f_opus and f_opus.get('output_config') == {'effort': 'low'}, f_opus)
+check('reasoning off -> fable keeps a set effort', thinking_fields('claude-fable-5-1', {'reasoning_effort': 'medium', 'extra_body': {'reasoning': {'enabled': False}}}).get('output_config') == {'effort': 'medium'})
+check('haiku line on sonnet 5.5 -> between_tools', thinking_fields('claude-sonnet-5-5', {'extra_body': {'thinking': {'type': 'disabled'}}}).get('thinking') == {'type': 'between_tools'})
+check('sonnet line on haiku 5.5 -> disabled', thinking_fields('claude-haiku-5-5', {'extra_body': {'thinking': {'type': 'between_tools'}}}).get('thinking') == {'type': 'disabled'})
+check('off line on opus 5.5 dropped', 'thinking' not in thinking_fields('claude-opus-5-5', {'extra_body': {'thinking': {'type': 'disabled'}}}))
+f_x = thinking_fields('claude-sonnet-5-5', {'reasoning_effort': 'xhigh', 'extra_body': {'reasoning': {'enabled': False}}})
+check('thinking off caps effort at high', f_x.get('output_config') == {'effort': 'high'} and f_x.get('thinking') == {'type': 'between_tools'}, f_x)
+check('no reasoning setting: left alone', 'thinking' not in thinking_fields('claude-sonnet-5-5', {'max_tokens': 500}))
+check('reasoning on: left alone', 'thinking' not in thinking_fields('claude-sonnet-5-5', {'extra_body': {'reasoning': {'enabled': True}}}))
+check('adaptive kept', thinking_fields('claude-sonnet-5-5', {'extra_body': {'thinking': {'type': 'adaptive'}, 'reasoning': {'enabled': False}}}).get('thinking') == {'type': 'adaptive'})
+req_off = native.build_request('claude-sonnet-5-5', msgs[:2], off_or, None, {}, cache=True)
+check('build_request sends thinking off', req_off['extra_body'].get('thinking') == {'type': 'between_tools'} and 'reasoning' not in req_off['extra_body'], req_off.get('extra_body'))
+
 # ---------- tool list stays byte-identical when nearby NPCs change (reply-2 cache miss) ----------
 def attack_tool(names_text):
     return [{'type': 'function', 'function': {'name': 'Attack', 'description': 'Attack someone.', 'parameters': {

@@ -1,4 +1,4 @@
-MANTELLA - DIRECT AI CONNECT — v1.1
+MANTELLA - DIRECT AI CONNECT — v1.2
 
 Adds "Anthropic (Native, cached)" and "Anthropic (Official)" as LLM services in Mantella, so
 Claude models can be used with your own Anthropic API key, without going through OpenRouter.
@@ -58,13 +58,15 @@ max_tokens. With thinking on (always for Opus and Fable), Mantella's default 250
 replies short or leave them empty. Set max_tokens to 2000 in LLM Parameters (Large Language
 Model tab, Advanced); spoken lines stay short, and you only pay for tokens actually used.
 
-Faster replies: thinking can be reduced on two models. Each line works ONLY on its own model;
-on any other model it makes every reply fail (error 400, the NPC stays silent). Remove the
-line before you switch model. Opus and Fable cannot turn thinking off.
-  Claude Haiku 5.5 only:   "extra_body": {"thinking": {"type": "disabled"}}
-  Claude Sonnet 5.5 only:  "extra_body": {"thinking": {"type": "between_tools"}}
-Do not add reasoning_effort "xhigh" or "max" next to either line (also error 400).
-Example for Haiku (thinking off, so 250 is enough):
+Faster, cheaper replies: current Claude models think before every reply unless told not to.
+That thinking is hidden but billed, and it counts toward max_tokens, so a low limit can end
+with no spoken line. To turn it off, use either line in LLM Parameters:
+  "extra_body": {"reasoning": {"enabled": false}}       (the OpenRouter switch also works here)
+  "extra_body": {"thinking": {"type": "disabled"}}
+The patch sends the form each model accepts: "between_tools" for Sonnet 5.5, "disabled" for
+Haiku 5.5 and the others. Opus 5.5 and Fable cannot turn thinking off; they get the lowest
+effort instead (or the reasoning_effort you set). Mantella's log says which one was sent.
+Example (thinking off, so 250 is enough):
   {"max_tokens": 250, "stop": ["#"], "extra_body": {"thinking": {"type": "disabled"}}}
 
 Antivirus: if the Anthropic services are missing after setup, or setup says Mantella.exe is
