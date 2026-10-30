@@ -27,16 +27,16 @@ def check(name, cond, detail=''):
 # ---------- conversion ----------
 thinking_store = {'call_1': [{'type': 'thinking', 'thinking': 'note', 'signature': 'sig'}]}
 msgs = [
-    {'role': 'system', 'content': 'You are Vega.'},
+    {'role': 'system', 'content': 'You are Mjoll.'},
     {'role': 'user', 'content': 'Hello'},
     {'role': 'assistant', 'content': None, 'tool_calls': [{'id': 'call_1', 'type': 'function', 'function': {'name': 'FollowMe', 'arguments': '{"x": 1}'}}]},
     {'role': 'tool', 'tool_call_id': 'call_1', 'content': 'done'},
-    {'role': 'user', 'content': [{'type': 'text', 'text': '(Vega follows.) Come on.'},
+    {'role': 'user', 'content': [{'type': 'text', 'text': '(Mjoll follows.) Come on.'},
                                  {'type': 'image_url', 'image_url': {'url': 'data:image/jpeg;base64,QUJD', 'detail': 'low'}}]},
     {'role': 'assistant', 'content': ''},
 ]
 system, conv = native.convert_messages(msgs, thinking_store)
-check('system joined', system == [{'type': 'text', 'text': 'You are Vega.'}], system)
+check('system joined', system == [{'type': 'text', 'text': 'You are Mjoll.'}], system)
 check('roles alternate', [m['role'] for m in conv] == ['user', 'assistant', 'user'], [m['role'] for m in conv])
 a = conv[1]['content']
 check('thinking put back before tool_use', [b['type'] for b in a] == ['thinking', 'tool_use'], a)
@@ -49,7 +49,7 @@ check('empty assistant dropped', conv[-1]['role'] == 'user')
 # it changed, and only the tool-use turn being continued needs its thinking, so earlier turns carry none.
 think = lambda n: [{'type': 'thinking', 'thinking': 'plan ' + n, 'signature': 'sig' + n}]
 call = lambda i: {'role': 'assistant', 'content': None, 'tool_calls': [{'id': i, 'type': 'function', 'function': {'name': 'FollowMe', 'arguments': '{}'}}]}
-three_turns = [{'role': 'system', 'content': 'You are Vega.'},
+three_turns = [{'role': 'system', 'content': 'You are Mjoll.'},
                {'role': 'user', 'content': 'Follow me.'}, call('call_a'), {'role': 'tool', 'tool_call_id': 'call_a', 'content': 'done'},
                {'role': 'assistant', 'content': 'Lead on.'},
                {'role': 'user', 'content': 'Wait here.'}, {'role': 'assistant', 'content': 'As you wish.'},
@@ -132,8 +132,8 @@ def all_blocks(req):
 
 shot = {'type': 'image_url', 'image_url': {'url': 'data:image/jpeg;base64,QUJD'}}
 turn_n = talk[:1] + [{'role': 'user', 'content': 'Hello'}, {'role': 'assistant', 'content': 'Well met.'},
-                     {'role': 'user', 'content': [{'type': 'text', 'text': '(Vega arrives.) Is Riverwood safe?'}, shot]}]
-turn_n1 = turn_n[:3] + [{'role': 'user', 'content': '(Vega arrives.) Is Riverwood safe?'}, {'role': 'assistant', 'content': 'Safe enough.'},
+                     {'role': 'user', 'content': [{'type': 'text', 'text': '(Mjoll arrives.) Is Riverwood safe?'}, shot]}]
+turn_n1 = turn_n[:3] + [{'role': 'user', 'content': '(Mjoll arrives.) Is Riverwood safe?'}, {'role': 'assistant', 'content': 'Safe enough.'},
                         {'role': 'user', 'content': [{'type': 'text', 'text': 'Why?'}, shot]}]
 req_n = native.build_request('claude-sonnet-5-5', turn_n, None, attack_tool(' Available: Pilgrim'), {}, cache=True)
 req_n1 = native.build_request('claude-sonnet-5-5', turn_n1, None, attack_tool(' Available: Lucan Valerius'), {}, cache=True)
@@ -151,9 +151,9 @@ req_tr = native.build_request('claude-sonnet-5-5', msgs[:4], None, None, thinkin
 check('tool result turn cached at its end', 'cache_control' in req_tr['messages'][-1]['content'][-1], req_tr['messages'][-1])
 # ---------- extension inputs: extra text after the cache point, system split into parts ----------
 req_x = native.build_request('claude-sonnet-5-5', turn_n, None, attack_tool(' Available: Pilgrim'), {}, cache=True,
-                             extra_texts=['(Vega knows CHAD well.)'])
+                             extra_texts=['(Mjoll knows Player well.)'])
 last_x = req_x['messages'][-1]['content']
-check('extra text is the last block', last_x[-1] == {'type': 'text', 'text': '(Vega knows CHAD well.)'}, last_x)
+check('extra text is the last block', last_x[-1] == {'type': 'text', 'text': '(Mjoll knows Player well.)'}, last_x)
 check('extra text after the cache point', all('cache_control' not in b for b in last_x[[b['type'] for b in last_x].index('image'):]), last_x)
 check('no extra text = same request', json.dumps(native.build_request('claude-sonnet-5-5', turn_n, None, None, {}, cache=True, extra_texts=[])) == json.dumps(native.build_request('claude-sonnet-5-5', turn_n, None, None, {}, cache=True)))
 def parts_hook(parts):
@@ -239,7 +239,7 @@ TEXT_AND_TOOL = [start(),
     {'type': 'content_block_stop', 'index': 1},
     {'type': 'content_block_start', 'index': 2, 'content_block': {'type': 'tool_use', 'id': 'toolu_9', 'name': 'FollowMe', 'input': {}}},
     {'type': 'content_block_delta', 'index': 2, 'delta': {'type': 'input_json_delta', 'partial_json': '{"target"'}},
-    {'type': 'content_block_delta', 'index': 2, 'delta': {'type': 'input_json_delta', 'partial_json': ': "Vega"}'}},
+    {'type': 'content_block_delta', 'index': 2, 'delta': {'type': 'input_json_delta', 'partial_json': ': "Mjoll"}'}},
     {'type': 'content_block_stop', 'index': 2},
 ] + stop('tool_use')
 
@@ -270,7 +270,7 @@ async def run(events, store, extra_texts=None):
 store = {}
 texts, state = asyncio.run(run(TEXT_AND_TOOL, store))
 check('text streamed', ''.join(texts) == 'Lead the way. I am right behind you.', texts)
-check('tool call assembled', state.tool_calls == [{'id': 'toolu_9', 'type': 'function', 'function': {'name': 'FollowMe', 'arguments': '{"target": "Vega"}'}}], state.tool_calls)
+check('tool call assembled', state.tool_calls == [{'id': 'toolu_9', 'type': 'function', 'function': {'name': 'FollowMe', 'arguments': '{"target": "Mjoll"}'}}], state.tool_calls)
 check('stop reason', state.stop_reason == 'tool_use')
 check('thinking stored by tool call', (store.get('toolu_9') if isinstance(store.get('toolu_9'), dict) else {}).get('thinking') == [{'type': 'thinking', 'thinking': 'Plan: follow.', 'signature': 'SIG'}], store)
 # test_thinking_dropped_when_prefix_changed (DACN-01): the continuation keeps the block only while system, tools and
