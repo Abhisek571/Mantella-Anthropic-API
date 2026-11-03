@@ -569,11 +569,13 @@ class ClientBase(AIClient):
     @staticmethod
     def _strip_unsupported_anthropic_params(base_url: str, llm_params: dict[str, Any] | None) -> dict[str, Any] | None:
         '''Removes request parameters that the Anthropic endpoint rejects or that only apply to OpenRouter.
-        Current Claude models return a 400 for non-default sampling values, so temperature / top_p / top_k are dropped.'''
-        if not utils.is_anthropic_endpoint(base_url) or not llm_params:
+        Current Claude models return a 400 for non-default sampling values, so temperature / top_p / top_k are dropped.
+        Player2 keeps its sampling values and only loses the OpenRouter setting.'''
+        is_player2 = base_url == utils.PLAYER2_ENDPOINT
+        if not (utils.is_anthropic_endpoint(base_url) or is_player2) or not llm_params:
             return llm_params
         params = dict(llm_params)
-        removed = [key for key in ('temperature', 'top_p', 'top_k') if params.pop(key, None) is not None]
+        removed = [] if is_player2 else [key for key in ('temperature', 'top_p', 'top_k') if params.pop(key, None) is not None]
         extra_body = params.get('extra_body')
         if isinstance(extra_body, dict) and 'provider' in extra_body:
             extra_body = dict(extra_body)
@@ -584,7 +586,7 @@ class ClientBase(AIClient):
             else:
                 params.pop('extra_body')
         if removed:
-            logger.info(f"Anthropic: ignoring LLM parameters not supported by Anthropic: {', '.join(removed)}")
+            logger.info(f"{'Player2' if is_player2 else 'Anthropic'}: ignoring LLM parameters it does not support: {', '.join(removed)}")
         return params
 
 
@@ -642,9 +644,10 @@ class ClientBase(AIClient):
             except (FileNotFoundError, PermissionError, ValueError):  # ValueError covers bad JSON and text
                 pass
 
-        # Anthropic has its own key file and never falls back to GPT_SECRET_KEY.txt (that key belongs to another service)
+        # Anthropic and Player2 have their own key files and never fall back to GPT_SECRET_KEY.txt (that key belongs to another service)
         is_anthropic = utils.is_anthropic_endpoint(target_service)
-        key_file_name = 'ANTHROPIC_SECRET_KEY.txt' if is_anthropic else 'GPT_SECRET_KEY.txt'
+        is_player2 = target_service == utils.PLAYER2_ENDPOINT
+        key_file_name = 'ANTHROPIC_SECRET_KEY.txt' if is_anthropic else 'PLAYER2_SECRET_KEY.txt' if is_player2 else 'GPT_SECRET_KEY.txt'
 
         if not api_key:
             for folder in [mod_parent_folder, Path('.')]:
@@ -661,6 +664,11 @@ class ClientBase(AIClient):
                     utils.play_error_sound()
                     logger.critical(f'''No secret key found for service '{service}' in ANTHROPIC_SECRET_KEY.txt.
 Please create an API key in the Claude Console (https://platform.claude.com/settings/keys) and paste it in ANTHROPIC_SECRET_KEY.txt, in the same folder as GPT_SECRET_KEY.txt.''')
+                    time.sleep(3)
+                elif show_error and is_player2:
+                    utils.play_error_sound()
+                    logger.critical(f'''No secret key found for service '{service}' in PLAYER2_SECRET_KEY.txt.
+Please paste your Player2 API key in PLAYER2_SECRET_KEY.txt, in the same folder as GPT_SECRET_KEY.txt.''')
                     time.sleep(3)
                 elif show_error:
                     utils.play_error_sound()
@@ -862,6 +870,9 @@ For more information, see here: https://art-from-the-machine.github.io/Mantella/
     def get_model_list(service: str, default_model: str = "google/gemma-4-26b-a4b-it:free", is_vision: bool = False, is_tool_calling: bool = False, show_key_error: bool = False) -> LLMModelList:
         if utils.is_anthropic_endpoint(ClientBase._get_endpoint(service)):
             return ClientBase._get_anthropic_model_list(is_vision, show_key_error)
+        if ClientBase._get_endpoint(service) == utils.PLAYER2_ENDPOINT:
+            # Player2 has no model list and picks the model itself
+            return LLMModelList([("Chosen by Player2", "default")], "default", allows_manual_model_input=False)
         if service not in ['OpenAI', 'OpenRouter', 'NanoGPT']:
             return LLMModelList([("Custom model","Custom model")], "Custom model", allows_manual_model_input=True)
         try:
