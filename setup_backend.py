@@ -1,4 +1,4 @@
-"""One-time setup for Mantella - Direct AI Connect. Requires Python 3.11.
+"""One-time setup for Mantella - Direct AI Connect. Requires Python 3.11.9 or a newer 3.11.
 
 Builds a patched copy of Mantella.exe (Mantella 0.14) inside this mod. Dual Input (type or speak in the same
 conversation) is included; the separate Mantella Dual Input mod is not needed.
@@ -117,6 +117,11 @@ def check_written(output, data):
 def build(base, output, root=ROOT, write_contract=False):
     if sys.version_info[:2] != (3, 11):
         raise ValueError('Use Python 3.11 to match the Mantella runtime.')
+    # 3.11.8 and older compile some of the patched code differently, so the built exe would not match the contract
+    if sys.version_info[:3] < (3, 11, 9):
+        raise ValueError('Python %d.%d.%d is too old: install Python 3.11.9 or newer from python.org '
+                         '(https://www.python.org/downloads/release/python-3119/) and run Setup Backend.cmd again. '
+                         'Nothing changed.' % sys.version_info[:3])
     base, output, root = Path(base).resolve(), Path(output).resolve(), Path(root).resolve()
     if base == output or (output.exists() and base.samefile(output)):
         raise ValueError('Refusing to replace the input Mantella executable.')

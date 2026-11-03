@@ -360,6 +360,7 @@ def get_openai_model_list():
 ANTHROPIC_ENDPOINT = 'https://api.anthropic.com/v1'
 # Native Messages API (Anthropic SDK), which supports prompt caching; the OpenAI-compatible endpoint above does not
 ANTHROPIC_NATIVE_ENDPOINT = 'https://api.anthropic.com'
+PLAYER2_ENDPOINT = 'https://api.player2.game/v1'
 
 
 def is_anthropic_endpoint(url: str) -> bool:
@@ -381,6 +382,9 @@ _KNOWN_SERVICES: dict[str, str] = {
     'anthropic(native,cached)': ANTHROPIC_NATIVE_ENDPOINT,
     'anthropic-native': ANTHROPIC_NATIVE_ENDPOINT,
     'https://api.anthropic.com/': ANTHROPIC_NATIVE_ENDPOINT,
+
+    'player2': PLAYER2_ENDPOINT,
+    'https://api.player2.game/v1/': PLAYER2_ENDPOINT,
 
     'kobold': 'http://127.0.0.1:5001/v1',
     'koboldcpp': 'http://127.0.0.1:5001/v1',

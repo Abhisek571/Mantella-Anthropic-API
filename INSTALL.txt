@@ -13,8 +13,8 @@ plain Mantella 0.14 exe, not the Dual Input exe.
 Optional: Mantella Living World - Integration Hub and Mantella Living World - Knowledge. The
 Living World settings tab only appears when one of them is installed.
 An Anthropic API key: https://platform.claude.com/settings/keys (API usage is billed by Anthropic).
-Python 3.11 is needed ONCE to prepare the backend.
-Use the official Windows Python 3.11 installer from https://www.python.org/downloads/windows/
+Python 3.11.9 or newer 3.11 is needed ONCE to prepare the backend (3.11.8 and older do not work).
+Use the official Windows Python 3.11.9 installer from https://www.python.org/downloads/release/python-3119/
 Install its Python launcher so the command "py -3.11" works (a uv/Astral-managed Python 3.11
 is not found). No pip packages are required; the Anthropic SDK is bundled.
 
@@ -40,7 +40,7 @@ INSTALL WITH MO2
    press Update and choose a model. Start a NEW conversation.
 
 If setup says "unsupported", STOP. Do not edit the hash check or overwrite the original.
-If Python is missing, install Python 3.11 and rerun Setup Backend.cmd.
+If Python is missing or older than 3.11.9, install Python 3.11.9 and rerun Setup Backend.cmd.
 Advanced setup: py -3.11 setup_backend.py --base "C:\path\to\Mantella.exe"
 
 USE
@@ -49,6 +49,10 @@ ANTHROPIC_SECRET_KEY.txt is only used for Anthropic. Other services keep using
 GPT_SECRET_KEY.txt, so you can mix them, for example Claude for conversations and
 OpenRouter for summaries. The summary, vision and tool-calling LLMs can use
 "Anthropic (Official)" too.
+Player2: set the LLM Service to "Player2" and paste your Player2 API key in PLAYER2_SECRET_KEY.txt,
+in the same folder as GPT_SECRET_KEY.txt. It is only used for Player2. Player2 picks the model itself
+and each request uses your Player2 joules. Not tested: Player2 support was made only from the API
+documentation on Player2's official website and has never been run against their service.
 temperature, top_p, top_k and the OpenRouter "provider" block are removed from the LLM
 Parameters for Anthropic requests (current Claude models reject them). Mantella's log says
 which ones were ignored.

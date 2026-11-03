@@ -45,8 +45,9 @@ class LLMDefinitions:
 
             If you are using an API (OpenAI, OpenRouter, etc) ensure you have the correct secret key set in `GPT_SECRET_KEY.txt` for the respective service you are using.
             For Anthropic (Official), put your Anthropic API key in `ANTHROPIC_SECRET_KEY.txt` next to `GPT_SECRET_KEY.txt`.
+            For Player2, put your Player2 API key in `PLAYER2_SECRET_KEY.txt` next to `GPT_SECRET_KEY.txt`.
             Anthropic (Native, cached) uses the same key and Anthropic's own API, which supports prompt caching: repeated parts of the prompt cost about a tenth after the first reply."""
-        return ConfigValueSelection("llm_api","LLM Service",description, "OpenRouter", ["OpenRouter", "Anthropic (Native, cached)", "Anthropic (Official)", "OpenAI", "NanoGPT", "KoboldCpp", "textgenwebui"], allows_free_edit=True)
+        return ConfigValueSelection("llm_api","LLM Service",description, "OpenRouter", ["OpenRouter", "Anthropic (Native, cached)", "Anthropic (Official)", "Player2", "OpenAI", "NanoGPT", "KoboldCpp", "textgenwebui"], allows_free_edit=True)
 
     @staticmethod
     def get_model_config_value() -> ConfigValue:
@@ -183,7 +184,7 @@ class LLMDefinitions:
             If you are using an API (OpenAI, OpenRouter, etc) ensure you have the correct secret key set in `GPT_SECRET_KEY.txt` for the respective service you are using.
 
             By default, summaries use the same LLM as conversations. Configure this to use a different model for summaries."""
-        return ConfigValueSelection("summary_llm_api","Custom Summary Model Service",description,"OpenRouter",["OpenRouter", "Anthropic (Native, cached)", "Anthropic (Official)", "OpenAI", "NanoGPT", "KoboldCpp", "textgenwebui"],allows_free_edit=True,tags=[ConfigValueTag.advanced])
+        return ConfigValueSelection("summary_llm_api","Custom Summary Model Service",description,"OpenRouter",["OpenRouter", "Anthropic (Native, cached)", "Anthropic (Official)", "Player2", "OpenAI", "NanoGPT", "KoboldCpp", "textgenwebui"],allows_free_edit=True,tags=[ConfigValueTag.advanced])
 
     @staticmethod
     def get_summary_llm_config_value() -> ConfigValue:
