@@ -53,6 +53,8 @@ Player2: set the LLM Service to "Player2" and paste your Player2 API key in PLAY
 in the same folder as GPT_SECRET_KEY.txt. It is only used for Player2. Player2 picks the model itself
 and each request uses your Player2 joules. Not tested: Player2 support was made only from the API
 documentation on Player2's official website and has never been run against their service.
+Player2 does not say which AI model it runs, so nobody here knows whether it is strong enough for
+Mantella's instructions, Advanced Actions and tool calling.
 temperature, top_p, top_k and the OpenRouter "provider" block are removed from the LLM
 Parameters for Anthropic requests (current Claude models reject them). Mantella's log says
 which ones were ignored.
