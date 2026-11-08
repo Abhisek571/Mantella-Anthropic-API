@@ -11,6 +11,7 @@ Every change to Mantella - Direct AI Connect. The Nexus page lists only the main
 - Models that think silently before their first word were cancelled by the stall rescue; the first word may now take four times as long.
 - A reply cut off by max_tokens ran half-written actions, and later dropped all of them; now only the last action, the only one that can be cut off, is dropped.
 - First-turn and departed-NPC handling fixes.
+- XTTS Accent now warns that it can cause static: the setting is renamed "XTTS Accent (can cause static)", its description starts with a warning, and the log warns once when it is on. It stays off by default and works as before when a player turns it on. With it on, XTTS reads English text with another language's rules (e.g. Portuguese for Imperials); in testing about 1 in 5 accented lines broke, with short lines running 7-14 seconds of static.
 
 ## 1.3.2 (2026-11-05)
 - Removed the Portable Python option: run Setup Backend.cmd with Python 3.11.9 installed.
