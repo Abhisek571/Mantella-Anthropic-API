@@ -12,6 +12,7 @@ from typing import Any, AsyncGenerator, Callable
 import json
 
 import src.utils as utils
+from src.llm import reliability
 
 logger = utils.get_logger()
 
@@ -492,15 +493,23 @@ class StreamState:
 
 
 async def stream_reply(client: Any, request: dict[str, Any], thinking_by_tool_call: dict[str, Any],
-                       state: StreamState) -> AsyncGenerator[str, None]:
-    """Streams one reply, yielding text. Tool calls and the stop reason are left in `state`."""
-    stream = await client.messages.create(stream=True, **request)
-    async for event in stream:
-        text = state.handle(event)
-        if text:
-            yield text
+                       state: StreamState, stall_seconds: float = 0) -> AsyncGenerator[str, None]:
+    """Streams one reply, yielding text. Tool calls and the stop reason are left in `state`. Raises TimeoutError when
+    no event of any kind arrives for stall_seconds (0 = no limit)."""
+    events = reliability.stall_limited(client.messages.create(stream=True, **request), stall_seconds)
+    try:
+        async for event in events:
+            text = state.handle(event)
+            if text:
+                yield text
+    finally:
+        await events.aclose()  # also when the reader stopped early
     if state.stop_reason == 'refusal':
         logger.warning("Anthropic (Native): Claude declined this reply (stop_reason=refusal)")
+    if state.stop_reason == 'max_tokens' and state.tool_calls:
+        # cut off by the token limit: an action's arguments may be incomplete, and Mantella would run it with defaults
+        logger.warning(f"Anthropic (Native): the reply hit max_tokens; dropped {len(state.tool_calls)} action call(s) that may be cut off. Raise max_tokens in LLM Parameters if this repeats")
+        state.tool_calls.clear()
     if state.tool_calls and state.thinking:
         thinking_by_tool_call[state.tool_calls[0]['id']] = {
             'thinking': list(state.thinking),

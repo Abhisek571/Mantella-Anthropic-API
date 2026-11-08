@@ -12,6 +12,8 @@ Hooks:
     extra_user_text(ctx) -> str              text added to the newest message, after the cache point
     summarize(ctx) -> bool                   True when the extension saved this conversation's memory itself
     memory_text(text, ctx) -> str            the memory text put into the prompt
+    dialogue_events(events, ctx) -> events   the in-game events about to go on a message, which can hold the dialogue
+                                             Mantella stored from the normal menu; an extension can shorten them
     conversation_limit(tokens) -> tokens     save the memory and trim the talk once it is this long (0 = stock:
                                              90% of the model's context)
     ui_tab(gr) -> None                       builds a section inside the "Living World" tab of the settings UI
@@ -31,7 +33,7 @@ import src.utils as utils
 logger = utils.get_logger()
 
 EXTENSIONS_DIR = 'extensions'
-HOOKS = ('filter_tools', 'system_parts', 'extra_user_text', 'summarize', 'memory_text', 'conversation_limit', 'ui_tab', 'ui_page')
+HOOKS = ('filter_tools', 'system_parts', 'extra_user_text', 'summarize', 'memory_text', 'dialogue_events', 'conversation_limit', 'ui_tab', 'ui_page')
 USAGE_LOG_SIZE = 200
 
 
@@ -48,7 +50,8 @@ class Api:
         self._registry._hooks.setdefault(hook, []).append((self.name, fn))
 
     def usage_log(self) -> list[dict]:
-        """Token use per reply, oldest first: {time, npc, cache_read, cache_write, uncached, output, model}."""
+        """Token use per reply, oldest first: {time, npc, cache_read, cache_write, uncached, output, model, cost}.
+        npc holds every NPC in the talk, comma separated, since one reply can switch speakers in a group."""
         return list(self._registry._usage)
 
 
@@ -57,6 +60,7 @@ class Registry:
         self.names: list[str] = []
         self._hooks: dict[str, list[tuple[str, Callable]]] = {}
         self._usage: deque = deque(maxlen=USAGE_LOG_SIZE)
+        self.speaking: str = ''  # the NPCs in the talk being answered, for the usage log
 
     def api_for(self, name: str) -> Api:
         return Api(self, name)
@@ -93,7 +97,7 @@ class Registry:
         return results
 
     def record_usage(self, entry: dict) -> None:
-        self._usage.append(entry)
+        self._usage.append({'npc': self.speaking, **entry})
 
 
 def load_all(root: str) -> Registry:

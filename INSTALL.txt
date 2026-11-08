@@ -1,4 +1,4 @@
-MANTELLA - DIRECT AI CONNECT — v1.2
+MANTELLA - DIRECT AI CONNECT — v1.3.2
 
 Adds "Anthropic (Native, cached)" and "Anthropic (Official)" as LLM services in Mantella, so
 Claude models can be used with your own Anthropic API key, without going through OpenRouter.

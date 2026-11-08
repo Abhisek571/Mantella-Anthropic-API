@@ -1,4 +1,5 @@
 import time
+import ipaddress
 import logging
 import re
 import string
@@ -406,8 +407,18 @@ def resolve_service_endpoint(value: str) -> str:
 
 
 def is_local_url(url: str) -> bool:
-    domain = urlparse(url).netloc
-    return domain.startswith("10.") or domain.startswith("127.") or domain.startswith("192.168") or domain.startswith("172.")
+    """True for a model on this PC or the local network: localhost, loopback, private and link-local addresses."""
+    try:
+        host = (urlparse(url).hostname or '').lower()
+    except ValueError:
+        return False
+    if host in ('localhost', '::1') or host.endswith('.localhost'):
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return address.is_private or address.is_loopback or address.is_link_local
 
 
 def get_model_token_limits():

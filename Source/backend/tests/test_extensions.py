@@ -64,6 +64,11 @@ with tempfile.TemporaryDirectory() as tmp:
         reg.record_usage({'cache_read': i})
     log_entries = reg.api_for('alpha').usage_log()
     check('usage log capped', len(log_entries) == ext.USAGE_LOG_SIZE and log_entries[-1]['cache_read'] == ext.USAGE_LOG_SIZE + 4, len(log_entries))
+    # the NPCs being answered are named on each entry
+    check('usage log: npc empty before any talk', log_entries[-1]['npc'] == '', log_entries[-1])
+    reg.speaking = 'Lydia, Mjoll'
+    reg.record_usage({'cache_read': 1})
+    check('usage log: npc from the talk', reg.api_for('alpha').usage_log()[-1]['npc'] == 'Lydia, Mjoll')
 
     # test_no_extensions_is_stock_behaviour
     empty = ext.load_all(str(Path(tmp) / 'missing'))
