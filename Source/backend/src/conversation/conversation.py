@@ -51,7 +51,8 @@ def trim_limits(limit, token_limit, system_tokens=0, minimum=4000) -> tuple[floa
 def _system_tokens(client, messages) -> int:
     """Tokens of the thread's system message (its first message), 0 if it can't be counted."""
     try:
-        return client.get_count_tokens(messages[0]) if len(messages) else 0
+        # a list goes through the tokenizer; a single Message would be counted in characters
+        return client.get_count_tokens([messages[0]]) if len(messages) else 0
     except Exception:
         return 0
 
@@ -93,6 +94,7 @@ class Conversation:
         self.__awaiting_player_input: bool = False
         self.__allow_interruption: bool = context_for_conversation.config.allow_interruption # allow mic interruption
         self.__is_player_interrupting = False
+        self.__first_events_sent: bool = False # the talk's first message carries the events from before it started
         self.__stt: Transcriber | None = stt
         self.__events_refresh_time: float = context_for_conversation.config.events_refresh_time  # Time in seconds before events are considered stale
         self.__transcribed_text: str | None = None
@@ -444,6 +446,8 @@ class Conversation:
         if self.__is_player_interrupting:
             all_ingame_events.append('Interrupting...')
             self.__is_player_interrupting = False
+        all_ingame_events = self.__extension_dialogue_events(all_ingame_events, not self.__first_events_sent)
+        self.__first_events_sent = True
         max_events = min(len(all_ingame_events) ,self.__context.config.max_count_events)
         message.add_event(all_ingame_events[-max_events:])
         self.__context.clear_context_ingame_events()        
@@ -452,6 +456,23 @@ class Conversation:
             logger.log(28, f'In-game events since previous exchange:\n{message.get_ingame_events_text()}')
 
         return message
+
+    def __extension_dialogue_events(self, events: list[str], is_first: bool) -> list[str]:
+        """Lets an extension shorten stored normal-menu dialogue before the events go on a message. is_first: these
+        events go on the talk's first message (the dialogue from before the talk); later ones were added during it."""
+        try:
+            import src.extensions as src_extensions
+            extensions = src_extensions.registry()
+            player = self.__context.npcs_in_conversation.get_player_character()
+            if not events or not player or not extensions.has('dialogue_events'):
+                return events
+            return extensions.filter('dialogue_events', events, {
+                'player': player.name, 'characters': self.__context.npcs_in_conversation.get_non_player_characters(),
+                'world_id': self.__context.world_id, 'game_days': self.__context.game_days, 'summaries': self.__rememberer,
+                'is_first': is_first})
+        except Exception as e:
+            logger.warning(f"Could not run the dialogue_events extensions ({e}); events kept as they are")
+            return events
 
     @utils.time_it
     def resume_after_interrupting_action(self) -> bool:
@@ -549,6 +570,14 @@ class Conversation:
         self.__sentences.clear()
         self.__save_conversation(is_reload=False, end_timestamp=end_timestamp)
     
+    def __note_speaking_npcs(self):
+        """Names the NPCs of this reply for the usage log; a failure here must not stop the reply."""
+        try:
+            import src.extensions as src_extensions
+            src_extensions.registry().speaking = ', '.join(npc.name for npc in self.__context.npcs_in_conversation.get_non_player_characters())
+        except Exception as e:
+            logger.debug(f"Could not note the NPCs for the usage log: {e}")
+
     @utils.time_it
     def __start_generating_npc_sentences(self, allow_tool_use: bool = True):
         """Starts a background Thread to generate sentences into the SentenceQueue"""    
@@ -562,6 +591,7 @@ class Conversation:
                 # Capture current OpenTelemetry context for the new thread
                 opentelemetry_context = OpenTelemetryContext.get_current()
                 keyword_actions = self.__offered_keyword_actions(self.context.config.actions)
+                self.__note_speaking_npcs()
                 def thread_target():
                     set_parent_context(opentelemetry_context)
                     self.__output_manager.generate_response(self.__messages, self.__context.npcs_in_conversation, self.__sentences, keyword_actions, tools, self.__game)
@@ -632,7 +662,8 @@ class Conversation:
             end_timestamp = self.__context.game_days
 
         is_radiant = isinstance(self.__conversation_type, radiant)
-        self.__rememberer.save_conversation_state(self.__messages, npcs_to_summarize, npcs, self.__context.world_id, is_reload, pending_shares, end_timestamp, is_radiant)
+        self.__rememberer.save_conversation_state(self.__messages, npcs_to_summarize, npcs, self.__context.world_id, is_reload, pending_shares, end_timestamp, is_radiant,
+                                                  departed=departed_npcs is not None)
 
     @utils.time_it
     def __initiate_reload_conversation(self):

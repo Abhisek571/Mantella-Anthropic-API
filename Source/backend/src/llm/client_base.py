@@ -19,6 +19,7 @@ import src.utils as utils
 from src.telemetry.telemetry import create_span_from_thread
 from src.actions.function_manager import FunctionManager
 from src.llm.claude_cache_connector import ClaudeCacheConnector
+from src.llm import reliability
 import src.extensions as src_extensions
 
 logger = utils.get_logger()
@@ -97,6 +98,10 @@ class ClientBase(AIClient):
         '''
         super().__init__()
         self._generation_lock: Lock = Lock()
+        self._api_url: str = api_url
+        llm_params, self._reliability = reliability.split_settings(llm_params)
+        self._llm_params_as_set: dict[str, Any] | None = llm_params
+        self._fallback_clients: dict[int, 'ClientBase | bool'] = {}  # False = skipped (already logged)
         self._base_url = self._get_endpoint(api_url)
         # Anthropic (Native, cached) talks to the Messages API through the Anthropic SDK instead of the OpenAI client
         self._is_native: bool = self._base_url == utils.ANTHROPIC_NATIVE_ENDPOINT
@@ -119,6 +124,9 @@ class ClientBase(AIClient):
         else: # Local LLM
             self._is_local: bool = True
             self._api_key: str = 'abc123'
+        self._stall_seconds: float = reliability.stall_limit(self._reliability, self._is_local)
+        if self._reliability['fallback_models']:
+            logger.log(23, "Fallback models if this one is out or rate limited: " + ', '.join(entry['model'] for entry in self._reliability['fallback_models']))
 
         referer = "https://art-from-the-machine.github.io/Mantella/"
         xtitle = "Mantella"
@@ -225,9 +233,13 @@ class ClientBase(AIClient):
         return anthropic.Anthropic(api_key=self._api_key)
 
 
+    NATIVE_ATTEMPTS = 3
+    NATIVE_RETRY_SECONDS = 5
+
     @utils.time_it
     def _native_request_call(self, messages: Message | message_thread) -> str | None:
-        """One-shot (non-streamed) request through the Messages API, used for summaries"""
+        """One-shot (non-streamed) request through the Messages API, used for summaries. An outage (rate limit,
+        overloaded, lost connection) is tried again a few times, as Mantella does for its other services."""
         from src.llm import anthropic_native
         with self._generation_lock:
             logger.log(28, 'Getting LLM response...')
@@ -237,14 +249,18 @@ class ClientBase(AIClient):
                 openai_messages = messages.get_openai_messages()
             # one-off prompts are not reused, so caching them would only add the cache-write cost
             request = anthropic_native.build_request(self.model_name, openai_messages, self._request_params, None, {}, cache=False)
-            client = self.generate_native_client(is_async=False)
-            try:
-                return anthropic_native.reply_text(client.messages.create(**request)) or None
-            except Exception as e:
-                logger.error(f"Anthropic (Native) request failed: {e}")
-                return None
-            finally:
-                client.close()
+            for attempt in range(1, self.NATIVE_ATTEMPTS + 1):
+                client = self.generate_native_client(is_async=False)
+                try:
+                    return anthropic_native.reply_text(client.messages.create(**request)) or None
+                except Exception as e:
+                    if not reliability.is_outage(e) or attempt == self.NATIVE_ATTEMPTS:
+                        logger.error(f"Anthropic (Native) request failed: {e}")
+                        return None
+                    logger.warning(f"Anthropic (Native) request failed ({e}), retrying in {self.NATIVE_RETRY_SECONDS} seconds...")
+                finally:
+                    client.close()
+                time.sleep(self.NATIVE_RETRY_SECONDS)
 
 
     @utils.time_it
@@ -330,13 +346,6 @@ class ClientBase(AIClient):
             with self._generation_lock:
                 logger.log(28, 'Getting LLM response...')
 
-                if self._request_params:
-                    request_params = self._request_params.copy() # copy of self._request_params to allow temporary override
-                else:
-                    request_params: dict[str, Any] = {}
-                if is_multi_npc: # override max_tokens to be at least 250 in radiant / multi-NPC conversations
-                    request_params["max_tokens"] = max(self.max_tokens_param, 250)
-                async_client = None
                 try:
                     # Prepare the messages including the image if provided
                     vision_hints = ''
@@ -365,12 +374,9 @@ class ClientBase(AIClient):
                     if tools:
                         tools = extensions.filter('filter_tools', tools, ext_ctx)
                     extra_texts = extensions.collect('extra_user_text', ext_ctx)
-                    if extra_texts and not self._is_native:
-                        openai_messages = self._with_extra_text(openai_messages, extra_texts)
-                    if not self._is_native and extensions.has('system_parts'):
-                        openai_messages = self._with_system_parts(openai_messages, lambda parts: extensions.filter('system_parts', parts, ext_ctx))
 
                     # Handle tool calling: use dedicated function client if available, otherwise use main LLM
+                    offered_tools = None
                     if tools:
                         if self._function_client:
                             pre_fetched_tool_calls = only_offered(self._function_client.check_for_actions(messages, tools) or [], tools)
@@ -378,124 +384,74 @@ class ClientBase(AIClient):
                                 yield ("tool_calls", pre_fetched_tool_calls)
                         else:
                             # If custom function LLM isn't enabled, let the main LLM handle tool calling as well as text generation
-                            request_params["tools"] = tools
-                    
-                    # Apply Claude cache breakpoint after all message transformations
-                    if not self._is_native and self._caching_enabled and self._claude_cache.is_applicable(self._base_url, self._model_name):
+                            offered_tools = tools
+
+                    # A model is only asked again, or replaced, while nothing has been spoken, so no words are repeated
+                    failure = None
+                    for link in self._reply_chain():
                         try:
-                            openai_messages = self._claude_cache.transform_messages(openai_messages)
+                            prepared = link._prepare_attempt(openai_messages, offered_tools, is_multi_npc, extra_texts, extensions, ext_ctx)
                         except Exception as e:
-                            logger.debug(f"Claude caching transform failed: {e}")
-
-                    native_request = None
-                    if self._is_native:
-                        from src.llm import anthropic_native
-                        system_parts = (lambda parts: extensions.filter('system_parts', parts, ext_ctx)) if extensions.has('system_parts') else None
-                        native_request = anthropic_native.build_request(self.model_name, openai_messages, request_params,
-                                                                        request_params.get("tools"), self._thinking_by_tool_call, cache=True,
-                                                                        extra_texts=extra_texts, system_parts=system_parts)
-
-                    # A stream that ends with no text and no tool call would leave the NPC silent.
-                    # Nothing has been yielded yet in that case, so ask again before giving up.
-                    for attempt in range(1 + self.EMPTY_REPLY_RETRIES):
-                        if native_request is not None:
-                            state = anthropic_native.StreamState()
-                            async_client = self.generate_native_client(is_async=True)
-                            try:
-                                async for text in anthropic_native.stream_reply(async_client, native_request, self._thinking_by_tool_call, state):
-                                    yield ("content", text)
-                            finally:
-                                await async_client.close()
-                                async_client = None
-                            if state.usage:
-                                extensions.record_usage({'time': time.time(), 'model': self.model_name, **state.usage,
-                                                         'cost': anthropic_native.reply_cost(self.model_name, state.usage)})
-                            offered_calls = only_offered(list(state.tool_calls), request_params.get("tools"))
-                            if offered_calls:
-                                yield ("tool_calls", offered_calls)
-                            if state.got_text or state.tool_calls:
-                                if attempt > 0:
-                                    logger.log(23, f"Empty-reply safety net: retry {attempt} succeeded")
-                                break
-                            if attempt < self.EMPTY_REPLY_RETRIES:
-                                logger.warning(f"Empty-reply safety net: the LLM returned nothing (stop_reason={state.stop_reason}, stop_sequence={state.stop_sequence!r}), retrying ({attempt + 1}/{self.EMPTY_REPLY_RETRIES})...")
-                            else:
-                                logger.warning(f"Empty-reply safety net: still nothing after {self.EMPTY_REPLY_RETRIES} retries (stop_reason={state.stop_reason}, stop_sequence={state.stop_sequence!r})")
+                            if link is self:
+                                raise
+                            logger.warning(f"Fallback: could not prepare a request for {link.model_name}: {e}")
                             continue
-
-                        # Create async client for main LLM streaming (after function client has run if applicable)
-                        if self._startup_async_client:
-                            async_client = self._startup_async_client
-                            self._startup_async_client = None # do not reuse the same client
-                        else:
-                            async_client = self.generate_async_client()
-
-                        # Dict to track partial tool calls by index
-                        accumulated_tool_calls = {}
-                        got_content = False
-                        finish_reason = None
-
-                        try:
-                            async for chunk in await async_client.chat.completions.create(
-                                model=self.model_name,
-                                messages=openai_messages,
-                                stream=True,
-                                **request_params,
-                            ):
+                        if link is not self:
+                            logger.warning(f"Fallback: asking {link.model_name} instead of {self.model_name}")
+                        stall_retried = False
+                        empty_retries = 0
+                        while True:
+                            attempt = reliability.Attempt()
+                            stream = link._stream_attempt(*prepared, attempt)
+                            try:
                                 try:
-                                    if chunk and chunk.choices and chunk.choices[0].finish_reason:
-                                        finish_reason = chunk.choices[0].finish_reason
-                                    if chunk and chunk.choices and chunk.choices[0].delta:
-                                        delta = chunk.choices[0].delta
+                                    async for item in stream:
+                                        yield item
+                                finally:
+                                    await stream.aclose()
+                            except Exception as e:
+                                if attempt.spoke or (link is self and not (self._reliability['fallback_models'] and reliability.is_outage(e))):
+                                    raise
+                                failure = e
+                                logger.warning(f"Fallback: {link.model_name} could not answer and has said nothing yet: {e}")
+                                break
 
-                                        # Handle regular content
-                                        if delta.content:
-                                            got_content = True
-                                            yield ("content", delta.content)
+                            if attempt.stalled:
+                                if attempt.spoke:
+                                    logger.warning(f"Stall rescue: {link.model_name} sent no data for {link._stall_seconds:g} seconds after it started speaking; keeping what it said and ending this reply")
+                                    return
+                                if not stall_retried:
+                                    stall_retried = True
+                                    logger.warning(f"Stall rescue: {link.model_name} sent no data for {link._stall_seconds:g} seconds; cancelled the request and retrying once...")
+                                    continue
+                                failure = reliability.ModelFailed(f"{link.model_name} sent no data for {link._stall_seconds:g} seconds, also on its retry")
+                                logger.warning(f"Stall rescue: {failure}")
+                                break
 
-                                        # Accumulate tool calls by index
-                                        if delta.tool_calls:
-                                            for tool_call in delta.tool_calls:
-                                                idx = tool_call.index
-                                                if idx not in accumulated_tool_calls:
-                                                    accumulated_tool_calls[idx] = {
-                                                        "id": tool_call.id if tool_call.id else "",
-                                                        "type": "function",
-                                                        "function": {
-                                                            "name": "",
-                                                            "arguments": ""
-                                                        }
-                                                    }
+                            if attempt.spoke or attempt.got_calls:
+                                if stall_retried:
+                                    logger.log(23, "Stall rescue: the retry succeeded")
+                                if empty_retries:
+                                    logger.log(23, f"Empty-reply safety net: retry {empty_retries} succeeded")
+                                return
 
-                                                # Accumulate the parts
-                                                if tool_call.id:
-                                                    accumulated_tool_calls[idx]["id"] = tool_call.id
-                                                if tool_call.function and tool_call.function.name:
-                                                    accumulated_tool_calls[idx]["function"]["name"] += tool_call.function.name
-                                                if tool_call.function and tool_call.function.arguments:
-                                                    accumulated_tool_calls[idx]["function"]["arguments"] += tool_call.function.arguments
-
-                                except Exception as e:
-                                    logger.error(f"LLM API Connection Error: {e}")
-                                    break
-                        finally:
-                            await async_client.close()
-                            async_client = None
-
-                        # After streaming completes, yield any accumulated tool calls
-                        if accumulated_tool_calls:
-                            tool_calls_list = only_offered([accumulated_tool_calls[i] for i in sorted(accumulated_tool_calls.keys())], request_params.get("tools"))
-                            if tool_calls_list:
-                                yield ("tool_calls", tool_calls_list)
-
-                        if got_content or accumulated_tool_calls:
-                            if attempt > 0:
-                                logger.log(23, f"Empty-reply safety net: retry {attempt} succeeded")
-                            break
-                        if attempt < self.EMPTY_REPLY_RETRIES:
-                            logger.warning(f"Empty-reply safety net: the LLM returned nothing (finish_reason={finish_reason}), retrying ({attempt + 1}/{self.EMPTY_REPLY_RETRIES})...")
-                        else:
-                            logger.warning(f"Empty-reply safety net: still nothing after {self.EMPTY_REPLY_RETRIES} retries (finish_reason={finish_reason})")
+                            # A stream that ends with no text and no tool call would leave the NPC silent.
+                            # Ask again only when the service's answer leaves a chance of a different result.
+                            kind = reliability.empty_reply_kind(attempt)
+                            if kind == 'final':
+                                logger.warning(f"Empty-reply safety net: not retrying, the same request would fail the same way ({attempt.detail}). The NPC says nothing this turn. If this says length or max_tokens, raise max_tokens in LLM Parameters")
+                                return
+                            if empty_retries < self.EMPTY_REPLY_RETRIES:
+                                empty_retries += 1
+                                logger.warning(f"Empty-reply safety net: the LLM returned nothing ({attempt.detail}), retrying ({empty_retries}/{self.EMPTY_REPLY_RETRIES})...")
+                                continue
+                            logger.warning(f"Empty-reply safety net: still nothing after {self.EMPTY_REPLY_RETRIES} retries ({attempt.detail})")
+                            if kind == 'outage':
+                                failure = reliability.ModelFailed(f"{link.model_name} reported a failure ({attempt.detail})")
+                                break
+                            return
+                    if failure:
+                        raise failure
                 except Exception as e:
                     utils.play_error_sound()
                     if isinstance(e, APIConnectionError):
@@ -514,9 +470,183 @@ class ClientBase(AIClient):
                             logger.error(f"LLM API Streaming Error: {e}")
                     else:
                         logger.error(f"LLM API Streaming Error: {e}")
-                finally:
-                    if async_client:
-                        await async_client.close()
+
+    def _reply_chain(self):
+        """This client, then a client per fallback model that can be used, built when first needed."""
+        yield self
+        for index, entry in enumerate(self._reliability['fallback_models']):
+            client = self._fallback_clients.get(index)
+            if client is None:
+                client = self._fallback_client(entry) or False
+                self._fallback_clients[index] = client
+            if client:
+                yield client
+
+    def _fallback_client(self, entry: dict[str, Any]) -> 'ClientBase | None':
+        """A client for one fallback model, or None (logged) when using it would break a setting or it has no key."""
+        service = entry['service'] or self._api_url
+        endpoint = self._get_endpoint(service)
+        rules = reliability.provider_rules(self._reliability, self._llm_params_as_set)
+        if reliability.is_openrouter(endpoint) and rules is None:
+            logger.warning(f"Fallback: skipped {entry['model']}: no OpenRouter provider rules are set, so its provider and data retention are not controlled. Add \"provider\" to extra_body or \"openrouter_provider\" to reliability in LLM Parameters")
+            return None
+        if entry['service'] and not utils.is_local_url(endpoint) and not ClientBase._get_api_key(service, show_error=False):
+            logger.warning(f"Fallback: skipped {entry['model']}: no secret key found for {service}")
+            return None
+        try:
+            client = ClientBase(service, entry['model'], reliability.fallback_params(self._llm_params_as_set, endpoint, rules), self._token_limit, self._caching_enabled)
+        except Exception as e:
+            logger.warning(f"Fallback: skipped {entry['model']}: {e}")
+            return None
+        client._stall_seconds = reliability.stall_limit(self._reliability, client.is_local)
+        return client
+
+    def _prepare_attempt(self, base_messages: list[dict], tools: list[dict] | None, is_multi_npc: bool, extra_texts: list[str], extensions, ext_ctx: dict) -> tuple:
+        """(messages, request parameters, Messages API request or None) in the form this client's service takes."""
+        if self._request_params:
+            request_params = self._request_params.copy() # copy of self._request_params to allow temporary override
+        else:
+            request_params: dict[str, Any] = {}
+        if is_multi_npc: # override max_tokens to be at least 250 in radiant / multi-NPC conversations
+            request_params["max_tokens"] = max(self.max_tokens_param, 250)
+        if tools:
+            request_params["tools"] = tools
+
+        openai_messages = base_messages
+        if extra_texts and not self._is_native:
+            openai_messages = self._with_extra_text(openai_messages, extra_texts)
+        if not self._is_native and extensions.has('system_parts'):
+            openai_messages = self._with_system_parts(openai_messages, lambda parts: extensions.filter('system_parts', parts, ext_ctx))
+
+        # Apply Claude cache breakpoint after all message transformations
+        if not self._is_native and self._caching_enabled and self._claude_cache.is_applicable(self._base_url, self._model_name):
+            try:
+                openai_messages = self._claude_cache.transform_messages(openai_messages)
+            except Exception as e:
+                logger.debug(f"Claude caching transform failed: {e}")
+
+        native_request = None
+        if self._is_native:
+            from src.llm import anthropic_native
+            system_parts = (lambda parts: extensions.filter('system_parts', parts, ext_ctx)) if extensions.has('system_parts') else None
+            native_request = anthropic_native.build_request(self.model_name, openai_messages, request_params,
+                                                            request_params.get("tools"), self._thinking_by_tool_call, cache=True,
+                                                            extra_texts=extra_texts, system_parts=system_parts)
+        return openai_messages, request_params, native_request
+
+    async def _stream_attempt(self, openai_messages: list[dict], request_params: dict[str, Any], native_request: dict[str, Any] | None,
+                              attempt: reliability.Attempt) -> AsyncGenerator[tuple[str, str | list], None]:
+        """One streamed request. Text is passed on as it arrives; tool calls come once it has finished. What the service
+        answered is left in `attempt`. API errors are raised; a stream without data ends with attempt.stalled set."""
+        if native_request is not None:
+            from src.llm import anthropic_native
+            state = anthropic_native.StreamState()
+            async_client = self.generate_native_client(is_async=True)
+            replies = anthropic_native.stream_reply(async_client, native_request, self._thinking_by_tool_call, state, self._stall_seconds)
+            try:
+                async for text in replies:
+                    attempt.spoke = True
+                    yield ("content", text)
+            except TimeoutError:
+                attempt.stalled = True
+            finally:
+                await replies.aclose()  # also when the reader stopped early
+                await reliability.close_client(async_client)
+                if state.usage:  # also for a request that failed after it started: its tokens may be billed
+                    src_extensions.registry().record_usage({'time': time.time(), 'model': self.model_name, **state.usage,
+                                                            'cost': anthropic_native.reply_cost(self.model_name, state.usage)})
+            attempt.finish = state.stop_reason
+            attempt.detail = f"stop_reason={state.stop_reason}, stop_sequence={state.stop_sequence!r}"
+            if attempt.stalled and not attempt.spoke:
+                return  # asked again: its finished tool calls will come again
+            attempt.got_calls = bool(state.tool_calls)
+            offered_calls = only_offered(list(state.tool_calls), request_params.get("tools"))
+            if offered_calls:
+                yield ("tool_calls", offered_calls)
+            return
+
+        # Create async client for main LLM streaming (after function client has run if applicable)
+        if self._startup_async_client:
+            async_client = self._startup_async_client
+            self._startup_async_client = None # do not reuse the same client
+        else:
+            async_client = self.generate_async_client()
+
+        # Dict to track partial tool calls by index
+        accumulated_tool_calls = {}
+
+        chunks = reliability.stall_limited(async_client.chat.completions.create(
+            model=self.model_name,
+            messages=openai_messages,
+            stream=True,
+            **request_params,
+        ), self._stall_seconds)
+        try:
+            async for chunk in chunks:
+                try:
+                    attempt.error = getattr(chunk, 'error', None) or attempt.error
+                    if chunk and chunk.choices and chunk.choices[0].finish_reason:
+                        attempt.finish = chunk.choices[0].finish_reason
+                        attempt.native_finish = getattr(chunk.choices[0], 'native_finish_reason', None)
+                    if chunk and chunk.choices and chunk.choices[0].delta:
+                        delta = chunk.choices[0].delta
+                        attempt.refusal = attempt.refusal or bool(getattr(delta, 'refusal', None))
+
+                        # Handle regular content
+                        if delta.content:
+                            attempt.spoke = True
+                            yield ("content", delta.content)
+
+                        # Accumulate tool calls by index
+                        if delta.tool_calls:
+                            for tool_call in delta.tool_calls:
+                                idx = tool_call.index
+                                if idx not in accumulated_tool_calls:
+                                    accumulated_tool_calls[idx] = {
+                                        "id": tool_call.id if tool_call.id else "",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "",
+                                            "arguments": ""
+                                        }
+                                    }
+
+                                # Accumulate the parts
+                                if tool_call.id:
+                                    accumulated_tool_calls[idx]["id"] = tool_call.id
+                                if tool_call.function and tool_call.function.name:
+                                    accumulated_tool_calls[idx]["function"]["name"] += tool_call.function.name
+                                if tool_call.function and tool_call.function.arguments:
+                                    accumulated_tool_calls[idx]["function"]["arguments"] += tool_call.function.arguments
+
+                except Exception as e:
+                    logger.error(f"LLM API Connection Error: {e}")
+                    break
+        except TimeoutError:
+            attempt.stalled = True
+            accumulated_tool_calls = {} # cut off: their arguments may be incomplete
+        finally:
+            await chunks.aclose()  # also when the reader stopped early
+            await reliability.close_client(async_client)
+
+        attempt.detail = f"finish_reason={attempt.finish}, native_finish_reason={attempt.native_finish}, refusal={attempt.refusal}, error={attempt.error}"
+        if attempt.error is not None or attempt.finish == 'error':
+            accumulated_tool_calls = {} # the service failed mid-reply: their arguments may be incomplete
+            if attempt.spoke:
+                logger.warning(f"LLM API Streaming Error: {self.model_name} reported a failure after it started speaking; keeping what it said ({attempt.detail})")
+        elif attempt.finish in ('length', 'max_tokens') and accumulated_tool_calls:
+            # cut off by the token limit: only the last action can be incomplete (Mantella would run it with defaults);
+            # the ones before it were finished when the next one began
+            last = max(accumulated_tool_calls.keys())
+            logger.warning(f"LLM API: {self.model_name} hit the token limit; dropped the last action call ({accumulated_tool_calls[last]['function'].get('name')}) that may be cut off, kept {len(accumulated_tool_calls) - 1}. Raise max_tokens in LLM Parameters if this repeats ({attempt.detail})")
+            del accumulated_tool_calls[last]
+
+        # After streaming completes, yield any accumulated tool calls
+        if accumulated_tool_calls:
+            attempt.got_calls = True
+            tool_calls_list = only_offered([accumulated_tool_calls[i] for i in sorted(accumulated_tool_calls.keys())], request_params.get("tools"))
+            if tool_calls_list:
+                yield ("tool_calls", tool_calls_list)
 
 
     @classmethod
