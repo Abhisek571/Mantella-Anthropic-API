@@ -30,6 +30,21 @@ def _safe_part(text: str) -> str:
     return safe or '_'
 
 
+def _write_next_summary_file(latest_file: str, text: str, npc_name: str) -> str | None:
+    """Writes a re-summary to the next numbered summary file and returns its path. Only the highest number is read,
+    so an empty text (a failed request) is not written: that would hide all of the NPC's earlier memories."""
+    if not text or not text.strip():
+        logger.warning(f"Summarizing {npc_name}'s summaries failed; kept the current summary file")
+        return None
+    base_directory, filename = os.path.split(latest_file)
+    file_prefix, old_number = filename.rsplit('_', 1)
+    new_number = int(os.path.splitext(old_number)[0]) + 1
+    new_file = os.path.join(base_directory, f"{file_prefix}_{new_number}.txt")
+    with open(new_file, 'w', encoding='utf-8') as f:
+        f.write(text)
+    return new_file
+
+
 class CharacterSummaryParameters:
     """Encapsulates the messages and involved characters for a single NPC's summary."""
     def __init__(self, messages: message_thread, involved_characters: List[Character]) -> None:
@@ -99,7 +114,7 @@ class Summaries(Remembering):
         return src_extensions.registry().filter('memory_text', text, {'characters': characters, 'world_id': world_id, 'summaries': self})
 
     @utils.time_it
-    def save_conversation_state(self, messages: message_thread, npcs_to_summarize: list[Character], npcs_in_conversation: Characters, world_id: str, is_reload=False, pending_shares: list[tuple[str, str, str]] | None = None, end_timestamp: float | None = None, is_radiant: bool = False):
+    def save_conversation_state(self, messages: message_thread, npcs_to_summarize: list[Character], npcs_in_conversation: Characters, world_id: str, is_reload=False, pending_shares: list[tuple[str, str, str]] | None = None, end_timestamp: float | None = None, is_radiant: bool = False, departed: bool = False):
         """Save conversation summaries for the requested NPCs, with per-NPC thread tracking.
 
         NPCs only get summaries of the messages they actually heard (based on participation log).
@@ -114,11 +129,13 @@ class Summaries(Remembering):
             pending_shares: List of (sharer_name, recipient_name, recipient_ref_id) for memory sharing
             end_timestamp: Optional timestamp to prepend to summaries
             is_radiant: Whether this is a Radiant conversation (bypass min message threshold)
+            departed: The NPCs left a talk that goes on; this is their last save of it (an extension sees it as a
+                finished talk for them, not a reload)
         """
         extensions = src_extensions.registry()
         if extensions.has('summarize') and any(extensions.collect('summarize', {
                 'messages': messages, 'npcs_to_summarize': npcs_to_summarize, 'npcs_in_conversation': npcs_in_conversation,
-                'world_id': world_id, 'is_reload': is_reload, 'pending_shares': pending_shares, 'end_timestamp': end_timestamp,
+                'world_id': world_id, 'is_reload': is_reload and not departed, 'departed': departed, 'pending_shares': pending_shares, 'end_timestamp': end_timestamp,
                 'is_radiant': is_radiant, 'client': self.__client, 'summaries': self})):
             return  # an extension saved this conversation's memory itself
         npc_message_threads: Dict[str, CharacterSummaryParameters] = self.get_threads_for_summarization(messages, npcs_in_conversation)
@@ -370,15 +387,7 @@ class Summaries(Remembering):
                     time.sleep(5)
                     continue
 
-            # Split the file path and increment the number by 1
-            base_directory, filename = os.path.split(conversation_summary_file)
-            file_prefix, old_number = filename.rsplit('_', 1)
-            old_number = os.path.splitext(old_number)[0]
-            new_number = int(old_number) + 1
-            new_conversation_summary_file = os.path.join(base_directory, f"{file_prefix}_{new_number}.txt")
-
-            with open(new_conversation_summary_file, 'w', encoding='utf-8') as f:
-                f.write(long_conversation_summary)
+            _write_next_summary_file(conversation_summary_file, long_conversation_summary, npc_name)
 
     @utils.time_it
     def __format_timestamp(self, game_days: float) -> str:
