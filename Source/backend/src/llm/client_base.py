@@ -635,9 +635,11 @@ class ClientBase(AIClient):
             if attempt.spoke:
                 logger.warning(f"LLM API Streaming Error: {self.model_name} reported a failure after it started speaking; keeping what it said ({attempt.detail})")
         elif attempt.finish in ('length', 'max_tokens') and accumulated_tool_calls:
-            # cut off by the token limit: an action's arguments may be incomplete, and Mantella would run it with defaults
-            logger.warning(f"LLM API: {self.model_name} hit the token limit; dropped {len(accumulated_tool_calls)} action call(s) that may be cut off. Raise max_tokens in LLM Parameters if this repeats ({attempt.detail})")
-            accumulated_tool_calls = {}
+            # cut off by the token limit: only the last action can be incomplete (Mantella would run it with defaults);
+            # the ones before it were finished when the next one began
+            last = max(accumulated_tool_calls.keys())
+            logger.warning(f"LLM API: {self.model_name} hit the token limit; dropped the last action call ({accumulated_tool_calls[last]['function'].get('name')}) that may be cut off, kept {len(accumulated_tool_calls) - 1}. Raise max_tokens in LLM Parameters if this repeats ({attempt.detail})")
+            del accumulated_tool_calls[last]
 
         # After streaming completes, yield any accumulated tool calls
         if accumulated_tool_calls:
