@@ -2,7 +2,7 @@
   "bases": {
     "b103fb5cbdfd9b3cb7bb1c157ad67bca1a1d8fcd554e76f2bd0ca5947d0757b1": {
       "name": "Mantella 0.14",
-      "patched_sha256": "a15a5703f99879a869927eab76c772ed1548f8d96c321a2c7bbbc13f49a104cc"
+      "patched_sha256": "96ba8c7f1620839d251217621751ed3252568da46f4540cf662a12a8e2aa0b13"
     }
   },
   "modules": {
@@ -14,6 +14,8 @@
     "src.http.routes.mantella_route": "9c8d2f4b25ab417d527b6f55ae93a17eeac8d34996fc98337f02e904e478fa5c",
     "src.remember.summaries": "082a335d7880e2e31bc7591a7eaee9ad8c938996eeaa54f29baf89f829a3becb",
     "src.ui.start_ui": "3c018a25d8a4b656535fb869a84685c7f4d3ad0e5c55024e93e03b87b837c199",
+    "src.tts.xtts": "d251e93c870a6534fb627840259a885d25de19c669b818d93219bdbd009e2278",
+    "src.config.definitions.tts_definitions": "49a0f1602fee7596568af696e7330694cf0e1b8b3b54c378188f5e9de9c02544",
     "src.conversation.conversation": "0de1774fc1bdc8adfc975391273a0f45371321c8a2111cdafeff655dde5bcd17",
     "src.game_manager": "7e403a38f296254ecac9b7600360f1dd49f9817ce0f6f369b8131a67e1051090",
     "src.http.communication_constants": "885b58b4836b4c24ae709cf3da44de247ccefa1006aa6f319d9497d371416d13",

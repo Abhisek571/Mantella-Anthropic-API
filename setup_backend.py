@@ -19,6 +19,8 @@ MODULES = {
     'src.http.routes.mantella_route': 'src/http/routes/mantella_route.py',
     'src.remember.summaries': 'src/remember/summaries.py',
     'src.ui.start_ui': 'src/ui/start_ui.py',
+    'src.tts.xtts': 'src/tts/xtts.py',
+    'src.config.definitions.tts_definitions': 'src/config/definitions/tts_definitions.py',
     # Mantella Dual Input 1.1, bundled
     'src.conversation.conversation': 'src/conversation/conversation.py',
     'src.game_manager': 'src/game_manager.py',
