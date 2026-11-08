@@ -2,23 +2,24 @@
   "bases": {
     "b103fb5cbdfd9b3cb7bb1c157ad67bca1a1d8fcd554e76f2bd0ca5947d0757b1": {
       "name": "Mantella 0.14",
-      "patched_sha256": "1c1772b93f2b84d6f169ab59964d131b7482349d3a93f63c497857d44ec2eef7"
+      "patched_sha256": "d86aac0b98d9b7c4016e8d6d833bc379eb723e4ff1913f03181571365b5603ef"
     }
   },
   "modules": {
-    "src.utils": "722250ae9ddefa555d64e49bfbc4462b1980c740b5a0cc16c34ff08d625aad50",
-    "src.llm.client_base": "1daa7ff3fba07d783512b147cb05fa3ec9f3401c35c36d3e6084db56ab3d3b34",
+    "src.utils": "1576a613919068845b692ff5b04e7d264b1038bc433a3d414fb5f914b7db71fd",
+    "src.llm.client_base": "361c1dac3c8de26da8bf523425d5cbd5e6fbde5c7cc14053ba6222f30ff442ef",
     "src.config.definitions.llm_definitions": "957dc8c22bdf7d3176fda25e42d3f5f18f24fdc639d1d2a45cead0799e369cde",
     "src.config.definitions.vision_definitions": "b06b8d46d3ae19a7ec9d10963f758e2ec96ee6d7b911b8050e98f03b68866c12",
     "src.config.definitions.action_definitions": "3086433ee80edc14a4f806f21f0ea5b72428d02cc38b0a52ef3c7967b5f44aa3",
     "src.http.routes.mantella_route": "9c8d2f4b25ab417d527b6f55ae93a17eeac8d34996fc98337f02e904e478fa5c",
-    "src.remember.summaries": "3eff48dc0bcab849a66f1be604a2ee2fb2a22e090a2c40dc42aa1377c29f73d7",
+    "src.remember.summaries": "082a335d7880e2e31bc7591a7eaee9ad8c938996eeaa54f29baf89f829a3becb",
     "src.ui.start_ui": "3c018a25d8a4b656535fb869a84685c7f4d3ad0e5c55024e93e03b87b837c199",
-    "src.conversation.conversation": "4a2b9f637b9b84acfb95343b72d7d0be7c02046260e482cf80d9e59ca6eb79de",
+    "src.conversation.conversation": "0de1774fc1bdc8adfc975391273a0f45371321c8a2111cdafeff655dde5bcd17",
     "src.game_manager": "7e403a38f296254ecac9b7600360f1dd49f9817ce0f6f369b8131a67e1051090",
     "src.http.communication_constants": "885b58b4836b4c24ae709cf3da44de247ccefa1006aa6f319d9497d371416d13",
-    "src.llm.anthropic_native": "a7f6a72aaf70748c3edecc88cf99b7bf8c42431944e410beff51a898d7e4818a",
-    "src.extensions": "9ba2e1242b64a32182b4e934d3387338fb950127696f3e2590ee4510e8409365",
+    "src.llm.anthropic_native": "0f32d71bf097ee259c92ac5e8b9e89d0b8143115d673a02c835772c63454dcb4",
+    "src.llm.reliability": "6894a4eb6904a36feddacccf4605e0c114a532f11ddb1f2018442e08dc801c9f",
+    "src.extensions": "4a640d5d726abb475fe95c3d14d59572a5a01ecbe65172f31bfbad51dc311919",
     "src.dual_input": "9bafc1b0490b4a29f1779976c4a50e43e70b44ac1c4d6fb7436501a381b3ad76"
   },
   "vendor": "909622b8e8fd7011242bd73f0732b4be87d640e42eabbe66bb10356bee99a245"

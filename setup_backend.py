@@ -27,6 +27,7 @@ MODULES = {
 # Modules this patch adds (not in stock Mantella)
 NEW_MODULES = {
     'src.llm.anthropic_native': 'src/llm/anthropic_native.py',
+    'src.llm.reliability': 'src/llm/reliability.py',
     'src.extensions': 'src/extensions.py',
     'src.dual_input': 'src/dual_input.py',
 }

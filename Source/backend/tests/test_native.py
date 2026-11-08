@@ -1,6 +1,6 @@
 """Offline tests for src/llm/anthropic_native.py against a fake Messages API server.
 Run with the native-venv Python: test_native.py <repo Source/backend dir>"""
-import asyncio, importlib.util, json, sys, threading, types, logging
+import asyncio, importlib.util, json, sys, threading, time, types, logging
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -13,6 +13,9 @@ src = types.ModuleType('src'); src.__path__ = []
 src_llm = types.ModuleType('src.llm'); src_llm.__path__ = []
 utils = types.ModuleType('src.utils'); utils.get_logger = lambda: logging.getLogger('mantella')
 sys.modules.update({'src': src, 'src.llm': src_llm, 'src.utils': utils})
+spec = importlib.util.spec_from_file_location('src.llm.reliability', BACKEND / 'src/llm/reliability.py')
+src_llm.reliability = importlib.util.module_from_spec(spec); spec.loader.exec_module(src_llm.reliability)
+sys.modules['src.llm.reliability'] = src_llm.reliability
 spec = importlib.util.spec_from_file_location('src.llm.anthropic_native', BACKEND / 'src/llm/anthropic_native.py')
 native = importlib.util.module_from_spec(spec); spec.loader.exec_module(native)
 import anthropic
@@ -298,11 +301,60 @@ check('fallback block handled', ''.join(texts) == 'Fine.' and state.fell_back_to
 texts, state = asyncio.run(run(REFUSAL, {}))
 check('refusal = empty, no crash', texts == [] and state.stop_reason == 'refusal' and not state.got_text)
 
+# T-10: a reply cut off by max_tokens keeps its text but drops its tool calls (their arguments may be incomplete)
+cut_store = {}
+texts, state = asyncio.run(run(TEXT_AND_TOOL[:-2] + stop('max_tokens'), cut_store))
+check('max_tokens: text kept', ''.join(texts) == 'Lead the way. I am right behind you.', texts)
+check('max_tokens: tool calls dropped', state.tool_calls == [] and state.stop_reason == 'max_tokens', state.tool_calls)
+check('max_tokens: no thinking stored for a dropped call', cut_store == {}, cut_store)
+
 client = anthropic.Anthropic(api_key='test-key', base_url=BASE, max_retries=0)
 reply = native.reply_text(client.messages.create(**native.build_request('claude-sonnet-5-5', msgs[:2], {'max_tokens': 1200}, None, {}, cache=False)))
 client.close()
 check('non-streamed summary', reply == 'A memory.', reply)
 check('summary uncached', 'cache_control' not in REQUESTS[-1]['body'] and all('cache_control' not in b for m in REQUESTS[-1]['body']['messages'] for b in m['content']) and 'cache_control' not in REQUESTS[-1]['body']['system'][-1])
+
+# ---------- stall limit with the real SDK: a silent server is cut off on time, whatever part of the stream it hangs in ----------
+class SilentHandler(BaseHTTPRequestHandler):
+    """Sends MODE's events (none = no headers at all), then says nothing while the connection stays open."""
+    def log_message(self, *a): pass
+    def do_POST(self):
+        self.rfile.read(int(self.headers['Content-Length']))
+        if SILENT['events'] is not None:
+            self.send_response(200); self.send_header('Content-Type', 'text/event-stream'); self.end_headers()
+            self.wfile.write(sse(SILENT['events'])); self.wfile.flush()
+        SILENT['release'].wait(30)
+
+SILENT = {'events': None, 'release': threading.Event()}
+silent_server = ThreadingHTTPServer(('127.0.0.1', 0), SilentHandler)
+silent_server.daemon_threads = True
+threading.Thread(target=silent_server.serve_forever, daemon=True).start()
+
+async def run_silent(events, stall):
+    SILENT['events'] = events
+    client = anthropic.AsyncAnthropic(api_key='test-key', base_url=f'http://127.0.0.1:{silent_server.server_address[1]}', max_retries=0)
+    state = native.StreamState()
+    texts, stalled = [], False
+    began = time.monotonic()
+    try:
+        request = native.build_request('claude-sonnet-5-5', msgs[:2], None, None, {}, cache=False)
+        async for t in native.stream_reply(client, request, {}, state, stall):
+            texts.append(t)
+    except TimeoutError:
+        stalled = True
+    finally:
+        await src_llm.reliability.close_client(client)
+    return texts, stalled, time.monotonic() - began, state
+
+texts, stalled, took, state = asyncio.run(run_silent(None, 0.5))
+check('no headers: stalled on time', stalled and texts == [] and 0.4 < took < 5, (stalled, texts, took))
+said = [start(), {'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}},
+        {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': 'Well, '}}]
+texts, stalled, took, state = asyncio.run(run_silent(said, 0.5))
+check('silent after some text: stalled, text kept', stalled and texts == ['Well, '] and 0.4 < took < 5, (stalled, texts, took))
+check('usage kept from the stalled reply', state.usage and state.usage['uncached'] == 40, state.usage)
+SILENT['release'].set()
+silent_server.shutdown()
 
 server.shutdown()
 print('\nRESULT:', 'ALL PASS' if not FAILS else f'{len(FAILS)} FAILED: {FAILS}')
