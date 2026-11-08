@@ -2,7 +2,7 @@
 
 Every change to Mantella - Direct AI Connect. The Nexus page lists only the main changes for each version.
 
-## Unreleased
+## 1.4.0 (2026-11-09)
 
 ### New
 - An empty reply is retried up to 2 times on every service, unless the service says the request would fail again.
