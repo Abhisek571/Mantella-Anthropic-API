@@ -507,9 +507,10 @@ async def stream_reply(client: Any, request: dict[str, Any], thinking_by_tool_ca
     if state.stop_reason == 'refusal':
         logger.warning("Anthropic (Native): Claude declined this reply (stop_reason=refusal)")
     if state.stop_reason == 'max_tokens' and state.tool_calls:
-        # cut off by the token limit: an action's arguments may be incomplete, and Mantella would run it with defaults
-        logger.warning(f"Anthropic (Native): the reply hit max_tokens; dropped {len(state.tool_calls)} action call(s) that may be cut off. Raise max_tokens in LLM Parameters if this repeats")
-        state.tool_calls.clear()
+        # cut off by the token limit: only the last action can be incomplete (Mantella would run it with defaults);
+        # the ones before it were finished when the next one began
+        dropped = state.tool_calls.pop()
+        logger.warning(f"Anthropic (Native): the reply hit max_tokens; dropped the last action call ({dropped.get('function', {}).get('name')}) that may be cut off, kept {len(state.tool_calls)}. Raise max_tokens in LLM Parameters if this repeats")
     if state.tool_calls and state.thinking:
         thinking_by_tool_call[state.tool_calls[0]['id']] = {
             'thinking': list(state.thinking),

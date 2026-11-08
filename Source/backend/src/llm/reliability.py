@@ -142,18 +142,25 @@ def fallback_params(params: dict[str, Any] | None, endpoint: str, rules: dict[st
     return params
 
 
+FIRST_EVENT_FACTOR = 4
+
+
 async def stall_limited(open_stream: Awaitable[AsyncIterable], seconds: float) -> AsyncGenerator[Any, None]:
     """Yields a stream's events, raising TimeoutError when opening it or waiting for the next event takes longer than
-    `seconds`. Any event counts as data, also thinking and keep-alive events. Time the caller spends on an event (voice
-    generation) does not count. 0 = no limit. The stream is closed however this ends, also when the reader stops early."""
+    `seconds`. Any event the SDK hands over counts as data, also thinking events. The first event may take
+    FIRST_EVENT_FACTOR times as long: a reasoning model can think silently while the service sends only keep-alive
+    comments, which the SDK drops. Time the caller spends on an event (voice generation) does not count. 0 = no limit.
+    The stream is closed however this ends, also when the reader stops early."""
     async with asyncio.timeout(seconds or None):
         stream = await open_stream
     iterator = aiter(stream)
+    first = True
     try:
         while True:
             try:
-                async with asyncio.timeout(seconds or None):
+                async with asyncio.timeout((seconds * FIRST_EVENT_FACTOR if first else seconds) or None):
                     event = await anext(iterator)
+                first = False
             except StopAsyncIteration:
                 return
             yield event
