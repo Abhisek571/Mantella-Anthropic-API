@@ -2,12 +2,12 @@
   "bases": {
     "b103fb5cbdfd9b3cb7bb1c157ad67bca1a1d8fcd554e76f2bd0ca5947d0757b1": {
       "name": "Mantella 0.14",
-      "patched_sha256": "0cf42aa12eff80833248f200577c9e70e72447655f75ebc75b253ea890e9eeb4"
+      "patched_sha256": "8a778917738f202e5eaa676220d3c1632adca1179d1fec4c98ca236746df4cd8"
     }
   },
   "modules": {
     "src.utils": "109f6684a4e4293fccf8bc15844aaaf8e6021411d02fbdfcbb4327a08e38a46e",
-    "src.llm.client_base": "1a729d7be96415f60b779a52d77bbbc09a505495cd327fbae909aeee6fd24917",
+    "src.llm.client_base": "72041d46f3a7fcfda86e6ecd43885246a3c08a2664600f4e9f553ee2e3149c91",
     "src.config.definitions.llm_definitions": "11d34ff14c606650b20ae9d5cb509735a1a7441b224314a84ece850730131d8b",
     "src.config.mantella_config_value_definitions_new": "5ff4b2311660e58372e7314d4dc33eb8994f4570a9fa987fe63e31cc0d674cce",
     "src.config.definitions.vision_definitions": "b06b8d46d3ae19a7ec9d10963f758e2ec96ee6d7b911b8050e98f03b68866c12",

@@ -223,13 +223,18 @@ check('the route keeps the earlier wait instead of always clearing it',
       and 'talk._Conversation__awaiting_action_result = False' not in route_src)
 
 # a group / radiant talk keeps the player's own reply limit (by either name), raised to 250 at least, in one key
-cb = load('src/llm/client_base.py', {'GROUP_MIN_TOKENS', 'token_limit', 'group_max_tokens'}, {})
+cb = load('src/llm/client_base.py', {'GROUP_MIN_TOKENS', '_limit_value', 'token_limit', 'group_max_tokens'}, {})
 group = cb['group_max_tokens']
 check('group talk: max_completion_tokens 1000 stays 1000, with no second max_tokens',
       group({'max_completion_tokens': 1000}) == {'max_completion_tokens': 1000})
 check('group talk: a low limit is raised to 250 in the key the player used', group({'max_completion_tokens': 100}) == {'max_completion_tokens': 250}
       and group({'max_tokens': 120}) == {'max_tokens': 250} and group({}) == {'max_tokens': 250})
-check('group talk: max_tokens wins when both are set', group({'max_tokens': 800, 'max_completion_tokens': 100}) == {'max_tokens': 800, 'max_completion_tokens': 100})
+check('group talk: both names set: each is raised to 250 at least (Anthropic (Native) sends the later one)',
+      group({'max_tokens': 800, 'max_completion_tokens': 100}) == {'max_tokens': 800, 'max_completion_tokens': 250})
+settings = {'extra_body': {'max_tokens': 100}}
+check('group talk: a limit in extra_body is raised there, and the settings themselves are left as they were',
+      group(dict(settings)) == {'extra_body': {'max_tokens': 250}} and settings == {'extra_body': {'max_tokens': 100}})
+check('group talk: a whole-number float limit counts', group({'max_tokens': 500.0}) == {'max_tokens': 500} and cb['token_limit']({'max_tokens': 500.0}) == 500)
 
 print('RESULT:' + ('ALL PASS' if not FAILS else f'{len(FAILS)} FAILED: {FAILS}'))
 sys.exit(1 if FAILS else 0)

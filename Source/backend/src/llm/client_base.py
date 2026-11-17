@@ -54,20 +54,38 @@ def only_offered(tool_calls: list, tools: list | None) -> list:
 GROUP_MIN_TOKENS = 250
 
 
+def _limit_value(value) -> int | None:
+    return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
 def token_limit(request_params: dict | None) -> int:
-    """The reply limit the player set, by either name (max_tokens, or OpenAI's max_completion_tokens), else 250."""
-    for key in ('max_tokens', 'max_completion_tokens'):
-        value = (request_params or {}).get(key)
-        if isinstance(value, int) and not isinstance(value, bool):
-            return value
+    """The reply limit the player set, by either name (max_tokens, or OpenAI's max_completion_tokens, or max_tokens
+    in extra_body), else 250."""
+    params = request_params or {}
+    extra = params.get('extra_body') if isinstance(params.get('extra_body'), dict) else {}
+    for value in (params.get('max_tokens'), params.get('max_completion_tokens'), extra.get('max_tokens')):
+        if _limit_value(value) is not None:
+            return _limit_value(value)
     return GROUP_MIN_TOKENS
 
 
 def group_max_tokens(request_params: dict) -> dict:
-    """Radiant and multi-NPC talks get at least GROUP_MIN_TOKENS, written into the limit the player set (so a higher
-    max_completion_tokens is never replaced by a second, lower max_tokens)."""
-    key = 'max_completion_tokens' if 'max_completion_tokens' in request_params and 'max_tokens' not in request_params else 'max_tokens'
-    request_params[key] = max(token_limit(request_params), GROUP_MIN_TOKENS)
+    """Radiant and multi-NPC talks get at least GROUP_MIN_TOKENS, written into every limit the player set (so a higher
+    limit is never replaced by a second, lower max_tokens, and a low one under another name never wins); none set:
+    max_tokens. extra_body is copied before it changes, as request_params is a shallow copy of the settings."""
+    set_any = False
+    for key in ('max_tokens', 'max_completion_tokens'):
+        if key in request_params:
+            set_any = True
+            if _limit_value(request_params[key]) is not None:
+                request_params[key] = max(_limit_value(request_params[key]), GROUP_MIN_TOKENS)
+    extra = request_params.get('extra_body')
+    if isinstance(extra, dict) and 'max_tokens' in extra:
+        set_any = True
+        if _limit_value(extra['max_tokens']) is not None:
+            request_params['extra_body'] = dict(extra, max_tokens=max(_limit_value(extra['max_tokens']), GROUP_MIN_TOKENS))
+    if not set_any:
+        request_params['max_tokens'] = GROUP_MIN_TOKENS
     return request_params
 
 
