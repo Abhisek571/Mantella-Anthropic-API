@@ -31,6 +31,9 @@ INSTALL WITH MO2
 4. Wait for "backend ready". In MO2's left pane, place this mod BELOW Mantella so it has
    higher priority and its Mantella.exe and its Scripts folder win. Enable it. Disable the separate
    Mantella Dual Input mod if you have it (this patch includes it).
+   With Mantella Living World - OStim Expansion installed, setup then builds the OStim flows
+   too. If that part fails, the backend is still ready: run Build Flows.cmd from OStim
+   Expansion's tools folder later.
 5. Create a text file named ANTHROPIC_SECRET_KEY.txt in the same folder as your
    GPT_SECRET_KEY.txt (the main Mantella mod folder) and paste your Anthropic API key on
    the first line. Under MO2 the file must be in the folder where MO2 shows Mantella.exe, or in

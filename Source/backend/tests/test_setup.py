@@ -126,5 +126,68 @@ check('model list shows the cache price', 'input_cache_read' in cb and 'Cache re
 ext_source = (BACKEND / 'src/extensions.py').read_text(encoding='utf-8')
 check("'conversation_limit' is a known hook", "'conversation_limit'" in ext_source.split('HOOKS =', 1)[1].split('\n', 1)[0])
 
-print('RESULT: ' + ('ALL PASS' if not FAILS else f'{len(FAILS)} FAILED: {FAILS}'))
+# A13: a running Mantella.exe gives a clear message (not a raw [WinError 5]); the original exe is also found in
+# Vortex's staging folder; an already patched exe given as the base is named as such.
+import hashlib, os
+with tempfile.TemporaryDirectory() as tmp:
+    out = Path(tmp) / 'mod' / 'Mantella.exe'
+    real_replace = Path.replace
+    def busy(self, target):
+        raise PermissionError(13, 'Access is denied', str(target), 5)
+    Path.replace = busy
+    try:
+        S.install(b'MZ new build', out)
+        check('running Mantella.exe: refused with advice', False, 'no error')
+    except ValueError as e:
+        check('running Mantella.exe: says to close Mantella and Skyrim, nothing changed',
+              'in use' in str(e) and 'close Mantella' in str(e) and 'Nothing changed' in str(e), str(e))
+    finally:
+        Path.replace = real_replace
+    check('...and no temporary file is left', not list(out.parent.glob('.mant-*')), list(out.parent.glob('*')))
+    S.install(b'MZ new build', out)
+    check('free to replace: written and checked', out.read_bytes() == b'MZ new build')
+
+with tempfile.TemporaryDirectory() as tmp:
+    tmp = Path(tmp)
+    stock = b'MZ stock mantella 0.14 (test)'
+    digest = hashlib.sha256(stock).hexdigest()
+    contract = tmp / 'contract.json'
+    contract.write_text(json.dumps({'bases': {digest: {'name': 'Mantella 0.14', 'patched_sha256': 'x'}}}), encoding='utf-8')
+    vortex = tmp / 'appdata' / 'Vortex' / 'skyrimse' / 'mods' / 'Mantella-1234' / S.EXE
+    vortex.parent.mkdir(parents=True)
+    vortex.write_bytes(stock)
+    dac = tmp / 'elsewhere' / 'Direct AI Connect'
+    dac.mkdir(parents=True)
+    old_contract, old_appdata = S.CONTRACT, os.environ.get('APPDATA')
+    S.CONTRACT, os.environ['APPDATA'] = contract, str(tmp / 'appdata')
+    try:
+        check("no sibling copy: the original exe is found in Vortex's staging folder", S.find_base(dac) == vortex, S.find_base(dac))
+        sibling = tmp / 'mods' / 'Mantella' / S.EXE
+        sibling.parent.mkdir(parents=True)
+        sibling.write_bytes(stock)
+        (tmp / 'mods' / 'DAC').mkdir()
+        check('a sibling mod folder (MO2) comes first', S.find_base(tmp / 'mods' / 'DAC') == sibling, S.find_base(tmp / 'mods' / 'DAC'))
+    finally:
+        S.CONTRACT = old_contract
+        if old_appdata is None:
+            os.environ.pop('APPDATA', None)
+        else:
+            os.environ['APPDATA'] = old_appdata
+
+with tempfile.TemporaryDirectory() as tmp:
+    tmp = Path(tmp)
+    patched = b'MZ an exe this setup built (test)'
+    (tmp / 'Source/backend').mkdir(parents=True)
+    (tmp / 'Source/backend/build-contract.json').write_text(json.dumps({'bases': {'f' * 64: {
+        'name': 'Mantella 0.14', 'patched_sha256': hashlib.sha256(patched).hexdigest()}}}), encoding='utf-8')
+    (tmp / 'Mantella.exe').write_bytes(patched)
+    try:
+        S.build(tmp / 'Mantella.exe', tmp / 'out' / 'Mantella.exe', root=tmp)
+        check('an already patched exe as the base: refused', False, 'no error')
+    except ValueError as e:
+        check('an already patched exe as the base: named as a Direct AI Connect build, not "Unsupported"',
+              'already a Direct AI Connect build' in str(e) and 'Unsupported' not in str(e), str(e))
+    check('...nothing written', not (tmp / 'out').exists())
+
+print('RESULT:' + ('ALL PASS' if not FAILS else f'{len(FAILS)} FAILED: {FAILS}'))
 sys.exit(1 if FAILS else 0)

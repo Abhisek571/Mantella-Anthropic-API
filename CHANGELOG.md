@@ -13,12 +13,15 @@ Every change to Mantella - Direct AI Connect. The Nexus page lists only the main
 - Anthropic (Native, cached): the reply after an action's result keeps the action list (with actions switched off for that one reply) instead of dropping it, so the action list and system prompt are still read from the cache on that reply and the next one, instead of the whole prompt being written again. Other LLM services work as before.
 - Extensions get the base ids of the NPCs being answered (`speaking_ids`) before each reply, so they know who speaks even before the game has written its speaker file.
 - New extension hook `server_actions`: an extension can hand the game an action for a reply itself (Mantella Living World's experimental Console uses it). The `memory_text` hook is now told the game time of the update it is built for.
+- Setup Backend.cmd also builds the OStim flows when Mantella Living World - OStim Expansion is installed (as its own mod or in the All in One), so Build Flows.cmd is only needed after changing animation packs. If the flows cannot be built, setup says so and the backend stays ready.
 - Run Setup Backend.cmd again after updating.
 
 ### Fixed
 - Mantella no longer freezes (game and web UI stop responding) when a conversation starts before the NPC has joined it, for example right after the conversation restarts. The game now asks for your reply instead, and a reply that fails with an error no longer leaves Mantella stuck either.
 - A helper model call made by an extension while a reply is running (Mantella Living World's Console) no longer waits for that reply to finish, which froze Mantella and its web UI.
 - Lip files are generated even when the game is started from a launcher that sets NoDefaultCurrentDirectoryInExePath.
+- A conversation started after loading a save in which the same NPCs were still listed in an earlier talk now sends those NPCs to Mantella. Before, the start request could carry no NPCs at all.
+- Setup Backend.cmd: pointing it at an already patched Mantella.exe, or running it while Mantella.exe is in use, now says what to do and changes nothing. It also finds stock Mantella's Mantella.exe in Vortex's staging folder, and skips a copy it cannot read.
 
 ## 1.4.0 (2026-11-09)
 
