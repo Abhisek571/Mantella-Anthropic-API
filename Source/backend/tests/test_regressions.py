@@ -152,6 +152,45 @@ check('end of talk: neither', end['is_reload'] is False and end['departed'] is F
 conv_src = (BACKEND / 'src/conversation/conversation.py').read_text(encoding='utf-8')
 check('departures pass departed to the save', 'departed=departed_npcs is not None' in conv_src)
 
+# B01: with Mantella's "Conversation summaries" off, the summarize extensions still run (an extension's own memory and
+# its per-talk resets live there); only the stock summary is skipped
+Saver = load_methods('src/conversation/conversation.py', 'Conversation', {'__save_conversation'},
+                     {'logger': log, 'conversation_log': NS(save_conversation_log=lambda *a: None), 'radiant': type('radiant', (), {}), 'Character': object})
+saves = []
+class Rememberer:
+    def save_conversation_state(self, *args, **kw): saves.append((args, kw))
+shares = [[('Lydia', 'Jenassa', '0001A2B3')]]
+people = NS(get_non_player_characters=lambda: [NS(name='Lydia', ref_id='1')], get_pending_shares=lambda: list(shares[0]),
+            clear_pending_shares=lambda: shares.__setitem__(0, []))
+saver = Saver.__new__(Saver)
+saver._Conversation__context = NS(npcs_in_conversation=people, config=NS(conversation_summary_enabled=False), world_id='w', game_days=2.0)
+saver._Conversation__messages = NS(transform_to_openai_messages=lambda m: [], get_talk_only=lambda: [])
+saver._Conversation__conversation_type = object()
+saver._Conversation__rememberer = Rememberer()
+saver._Conversation__save_conversation(False)
+check('summaries off: the save still reaches the summarize extensions, marked as no stock summary',
+      len(saves) == 1 and saves[0][1].get('stock_summary') is False, saves)
+check('summaries off: the pending shares go to the extensions and are cleared',
+      saves and saves[0][0][5] == [('Lydia', 'Jenassa', '0001A2B3')] and shares[0] == [], (saves, shares))
+saves.clear()
+saver._Conversation__context.config.conversation_summary_enabled = True
+saver._Conversation__save_conversation(False)
+check('summaries on: a normal save with the stock summary', len(saves) == 1 and saves[0][1].get('stock_summary') is True, saves)
+saves.clear()
+saver._Conversation__context.config.conversation_summary_enabled = False
+saver._Conversation__save_conversation(True)
+check('summaries off, a reload: still saved with the stock summary (as before)', len(saves) == 1 and saves[0][1].get('stock_summary') is True, saves)
+unhandled = []
+REG.collect = lambda hook, ctx: (unhandled.append(ctx), [False])[1]  # no extension took the save
+try:
+    summ.save_conversation_state(None, [], None, 'w', stock_summary=False)
+    stopped = True
+except Exception as e:  # the stock summary would have read the message threads
+    stopped = e
+finally:
+    del REG.collect
+check('summaries off and no extension took it: no stock summary', stopped is True and len(unhandled) == 1, stopped)
+
 # live test 4: the talk's memory text is built before the game writes the new talk's counter, so after an older save is
 # loaded the extension needs Mantella's own game time of that request to tell which memories the loaded save has
 Summ2 = load_methods('src/remember/summaries.py', 'Summaries', {'get_prompt_text', 'note_game_days'}, {'src_extensions': sys.modules['src.extensions'], 'Character': object})
@@ -166,5 +205,22 @@ mem_ctx = REG.ctx[0][1] if REG.ctx and REG.ctx[0][0] == 'memory_text' else {}
 check('memory_text: the hook is given the game time of the request', mem_ctx.get('game_days') == 3.25, mem_ctx)
 check('the conversation passes the game time of each update to the summaries', 'note_game_days' in conv_src and 'note(game_days)' in conv_src)
 
-print('RESULT: ' + ('ALL PASS' if not FAILS else f'{len(FAILS)} FAILED: {FAILS}'))
+# B10: an event turn whose events did not resume the talk must not clear a real action's wait for its result (an
+# Inventory action waiting for the game lost its follow-up reply when a World event turn came in between)
+C = NS(KEY_REPLYTYPE='mantella_reply_type', KEY_REPLYTYPE_NPCACTION='mantella_npc_action',
+       KEY_ACTOR_ACTIONS_REQUIRE_RESPONSE='mantella_actions_require_response')
+route = load('src/http/routes/mantella_route.py', {'awaits_action_result'}, {'comm_consts': C, 'Any': object})
+waits = route['awaits_action_result']
+talk_reply = {C.KEY_REPLYTYPE: 'mantella_npc_talk'}
+action_reply = lambda needs: {C.KEY_REPLYTYPE: C.KEY_REPLYTYPE_NPCACTION, C.KEY_REPLYTYPE_NPCACTION: {C.KEY_ACTOR_ACTIONS_REQUIRE_RESPONSE: needs}}
+check('event turn: a real action still waiting keeps waiting', waits(True, talk_reply) is True)
+check('event turn: no action waiting before, none now: cleared (as before)', waits(False, talk_reply) is False and waits(False, None) is False)
+check('event turn: this reply sends an action that needs its result: it waits', waits(False, action_reply(True)) is True)
+check('event turn: an action that needs no result: cleared', waits(False, action_reply(False)) is False)
+route_src = (BACKEND / 'src/http/routes/mantella_route.py').read_text(encoding='utf-8')
+check('the route keeps the earlier wait instead of always clearing it',
+      'talk._Conversation__awaiting_action_result = awaits_action_result(was_awaiting, reply)' in route_src
+      and 'talk._Conversation__awaiting_action_result = False' not in route_src)
+
+print('RESULT:' + ('ALL PASS' if not FAILS else f'{len(FAILS)} FAILED: {FAILS}'))
 sys.exit(1 if FAILS else 0)

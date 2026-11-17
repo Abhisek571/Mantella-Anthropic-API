@@ -701,12 +701,11 @@ class Conversation:
         for npc in npcs_to_summarize:
             conversation_log.save_conversation_log(npc, self.__messages.transform_to_openai_messages(self.__messages.get_talk_only()), self.__context.world_id)
         
-        # Skip summary generation if disabled (but always allow reloads to save state)
-        if not is_reload and not self.__context.config.conversation_summary_enabled:
+        # Skip the stock summary if disabled (but always allow reloads to save state). The summarize extensions still
+        # run: they keep their own memory and reset their per-talk state there.
+        stock_summary = is_reload or self.__context.config.conversation_summary_enabled
+        if not stock_summary:
             logger.info("Conversation summaries disabled. Skipping summary generation.")
-            # Even when skipping summaries, clear any pending shares to avoid leaking them
-            npcs.clear_pending_shares()
-            return
 
         # Get and clear pending shares (only on final save, not reload)
         pending_shares = None
@@ -720,7 +719,7 @@ class Conversation:
 
         is_radiant = isinstance(self.__conversation_type, radiant)
         self.__rememberer.save_conversation_state(self.__messages, npcs_to_summarize, npcs, self.__context.world_id, is_reload, pending_shares, end_timestamp, is_radiant,
-                                                  departed=departed_npcs is not None)
+                                                  departed=departed_npcs is not None, stock_summary=stock_summary)
 
     @utils.time_it
     def __initiate_reload_conversation(self):

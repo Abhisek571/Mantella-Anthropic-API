@@ -120,7 +120,7 @@ class Summaries(Remembering):
                                                                       'game_days': self.__game_days})
 
     @utils.time_it
-    def save_conversation_state(self, messages: message_thread, npcs_to_summarize: list[Character], npcs_in_conversation: Characters, world_id: str, is_reload=False, pending_shares: list[tuple[str, str, str]] | None = None, end_timestamp: float | None = None, is_radiant: bool = False, departed: bool = False):
+    def save_conversation_state(self, messages: message_thread, npcs_to_summarize: list[Character], npcs_in_conversation: Characters, world_id: str, is_reload=False, pending_shares: list[tuple[str, str, str]] | None = None, end_timestamp: float | None = None, is_radiant: bool = False, departed: bool = False, stock_summary: bool = True):
         """Save conversation summaries for the requested NPCs, with per-NPC thread tracking.
 
         NPCs only get summaries of the messages they actually heard (based on participation log).
@@ -137,6 +137,8 @@ class Summaries(Remembering):
             is_radiant: Whether this is a Radiant conversation (bypass min message threshold)
             departed: The NPCs left a talk that goes on; this is their last save of it (an extension sees it as a
                 finished talk for them, not a reload)
+            stock_summary: False when Mantella's "Conversation summaries" setting is off: the summarize extensions
+                still run (they keep their own memory), the stock summary does not
         """
         extensions = src_extensions.registry()
         if extensions.has('summarize') and any(extensions.collect('summarize', {
@@ -144,6 +146,8 @@ class Summaries(Remembering):
                 'world_id': world_id, 'is_reload': is_reload and not departed, 'departed': departed, 'pending_shares': pending_shares, 'end_timestamp': end_timestamp,
                 'is_radiant': is_radiant, 'client': self.__client, 'summaries': self})):
             return  # an extension saved this conversation's memory itself
+        if not stock_summary:
+            return
         npc_message_threads: Dict[str, CharacterSummaryParameters] = self.get_threads_for_summarization(messages, npcs_in_conversation)
 
         # Filter to only the NPCs the caller wants summarized
