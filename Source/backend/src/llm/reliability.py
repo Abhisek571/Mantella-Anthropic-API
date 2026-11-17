@@ -6,6 +6,7 @@ Settings live in the LLM Parameters box, under "reliability", and never reach th
                                         "openrouter_provider": {"ignore": ["SomeProvider"], "data_collection": "deny"}}}
 """
 import asyncio
+import re
 import copy
 import inspect
 from typing import Any, AsyncIterable, AsyncGenerator, Awaitable
@@ -231,3 +232,136 @@ def empty_reply_kind(attempt: Attempt) -> str:
     if attempt.error is not None:
         return 'outage' if is_outage(attempt.error) else 'final'
     return 'outage' if attempt.finish == 'error' else 'transient'
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Planning text kept out of speech
+# ---------------------------------------------------------------------------------------------------------------------
+# With no thinking before its first action call (Sonnet 5.5 takes thinking "between_tools", the only "off" form
+# it accepts), a model about to call an action sometimes writes its own deliberation as plain text: "She's flattered,
+# but she has a partner. I'll have her react with arousal and decide." Every text delta is streamed straight into
+# speech, so the NPC said it aloud (live test 18: 5 replies, each with action calls; none in 39 replies without).
+# PlanningGuard passes the reply on sentence by sentence and leaves such sentences out.
+
+# Wording only a narrator planning the reply uses (never an NPC speaking in character)
+PLANNING = re.compile(
+    r"\bI(?:'ll| will|'m going to| am going to)\s+(?:have|let|make)\s+(?:her|him|them)\s+(?:react|respond|reply|answer|decide|accept|decline|agree|refuse)\b"
+    r"|\b(?:reply|replies|replying|respond|responds|responding|answer|answers|answering|stay|stays|speak|speaks)\s+in character\b"
+    r"|\b(?:I'll|I will|I'm going to)\s+(?:answer|reply|respond|speak)\s+as\s+[A-Z]"
+    r"|\b(?:rate|rates|rating|rated)\b[^.!?]{0,60}\b(?:appetite|silently|quietly)\b"
+    r"|\b(?:the|this|that)\s+(?:attached\s+)?(?:image|screenshot)\s+(?:shows|is|was|appears|seems)\b|\battached\s+(?:image|screenshot|picture)\b"
+    r"|\bpoints?\s+(?:to|toward|towards)\s+(?:accepting|declining|agreeing|refusing|a yes|a no)\b"
+    r"|\b(?:her|his|their)\s+own\s+choice\s+to\s+(?:accept|decline|agree|refuse)\b"
+    r"|\bso\s+(?:she|he|they)(?:'s|'re|\s+is|\s+are)\s+(?:willing|unwilling|agreeable)\b"
+    r"|\b(?:the|an|this)\s+(?:tool|function)\s+call\b|\b(?:call|use)\s+the\s+[A-Z]\w+\s+(?:action|tool)\b",
+    re.I)
+SELF_VERBS = (r"(?:is|isn't|has|hasn't|was|wasn't|seems|would|will|won't|does|doesn't|did|didn't|can't|cannot|knows|"
+              r"wants|feels|likes|decides|accepts|declines|agrees|refuses|sees|thinks)")
+# "Name: " at the start of a sentence: the speaker in a group talk
+SPEAKER_PREFIX = re.compile(r"^\s*([A-Z][\w'. -]{0,40}?):\s+")
+FIRST_SECOND_PERSON = re.compile(r"\b(?:I|I'm|I'll|I've|I'd)\b|\b(?:me|my|mine|myself|we|us|our|ours|you|your|yours|yourself|"
+                                 r"you're|you'll|you've|ye|thee|thou|thy)\b", re.I)
+THIRD_PERSON = re.compile(r"\b(?:she|she's|her|hers|herself|he|he's|him|his|himself|they|them|their)\b", re.I)
+SENTENCE_END = re.compile(r"[.!?…]+[\"')\]]*\s+|\n+")
+
+
+class PlanningGuard:
+    """Passes a streamed reply on whole sentences at a time and leaves out the model's planning text: a sentence with
+    PLANNING wording, or one where the speaking NPC talks of themself by name ("Haelga is giddy ..."); after one of
+    those, every sentence of the reply in neither first nor second person (the narration goes on), and the sentence
+    held just before it if that one is narration too. lookahead: hold one whole sentence back (only for replies that
+    may call actions, the only ones seen doing this; it costs the time one sentence takes to stream). speakers: the
+    NPCs in the talk (with one NPC, a sentence naming them in the third person is theirs). Text and order are kept
+    exactly; a "Name:" prefix of a left-out sentence goes on to the next sentence kept."""
+
+    def __init__(self, speakers=(), lookahead: bool = True):
+        self.speakers = [s.strip() for s in speakers if isinstance(s, str) and s.strip()]
+        # whole names and first names ("Lucan Valerius", "Lucan"), for the narration test
+        self.names = list(dict.fromkeys(self.speakers + [s.split()[0] for s in self.speakers]))
+        self.current = ''  # the speaker the last "Name:" prefix named (a group talk)
+        self.lookahead = lookahead
+        self.buffer = ''
+        self.held: str | None = None
+        self.found = False
+        self.prefix = ''
+        self.dropped: list[str] = []
+
+    def feed(self, text: str) -> list[str]:
+        """The text that can be spoken now, given the next streamed piece."""
+        self.buffer += text or ''
+        out = []
+        while True:
+            match = SENTENCE_END.search(self.buffer)
+            if not match:
+                return out
+            sentence, self.buffer = self.buffer[:match.end()], self.buffer[match.end():]
+            out += self._take(sentence)
+
+    def flush(self) -> list[str]:
+        """Everything still kept back, at the reply's end or before its action calls."""
+        out, tail = [], ''
+        if self.buffer.strip():
+            out = self._take(self.buffer)
+        else:
+            tail = self.buffer
+        self.buffer = ''
+        if self.held is not None:
+            out.append(self._emit(self.held))
+            self.held = None
+        return [t for t in out + [tail] if t]
+
+    def _speaker(self, sentence: str) -> str:
+        prefix = SPEAKER_PREFIX.match(sentence)
+        if prefix:
+            self.current = prefix.group(1).strip()
+            return self.current
+        return self.current or (self.speakers[0] if len(self.speakers) == 1 else '')
+
+    def _body(self, sentence: str) -> str:
+        prefix = SPEAKER_PREFIX.match(sentence)
+        return sentence[prefix.end():] if prefix else sentence
+
+    def planning(self, sentence: str) -> bool:
+        body = self._body(sentence)
+        if PLANNING.search(body):
+            return True
+        name = self._speaker(sentence)
+        return bool(name) and re.match(rf"\s*{re.escape(name)}(?:'s\s|\s+{SELF_VERBS}\b)", body) is not None
+
+    def narration(self, sentence: str) -> bool:
+        body = self._body(sentence)
+        if FIRST_SECOND_PERSON.search(body) or '"' in body:
+            return False
+        return bool(THIRD_PERSON.search(body)) or any(re.search(rf"\b{re.escape(n)}\b", body) for n in self.names)
+
+    def _drop(self, sentence: str) -> None:
+        prefix = SPEAKER_PREFIX.match(sentence)
+        if prefix:
+            self.prefix = prefix.group(0)
+        self.dropped.append(sentence.strip())
+        logger.log(23, f"Planning text left out of the spoken reply: {sentence.strip()!r}")
+
+    def _emit(self, sentence: str) -> str:
+        if self.prefix and not SPEAKER_PREFIX.match(sentence):
+            sentence = self.prefix + sentence.lstrip()
+        self.prefix = ''
+        return sentence
+
+    def _take(self, sentence: str) -> list[str]:
+        if self.planning(sentence):
+            self.found = True
+            if self.held is not None and self.narration(self.held):
+                self._drop(self.held)
+                self.held = None
+            self._drop(sentence)
+            return []
+        if self.found and self.narration(sentence):
+            self._drop(sentence)
+            return []
+        out = [self._emit(self.held)] if self.held is not None else []
+        self.held = None
+        if self.lookahead:
+            self.held = sentence
+        else:
+            out.append(self._emit(sentence))
+        return out
