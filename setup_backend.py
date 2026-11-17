@@ -14,6 +14,7 @@ MODULES = {
     'src.utils': 'src/utils.py',
     'src.llm.client_base': 'src/llm/client_base.py',
     'src.config.definitions.llm_definitions': 'src/config/definitions/llm_definitions.py',
+    'src.config.mantella_config_value_definitions_new': 'src/config/mantella_config_value_definitions_new.py',
     'src.config.definitions.vision_definitions': 'src/config/definitions/vision_definitions.py',
     'src.config.definitions.action_definitions': 'src/config/definitions/action_definitions.py',
     'src.http.routes.mantella_route': 'src/http/routes/mantella_route.py',

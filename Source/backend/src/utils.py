@@ -18,6 +18,10 @@ if platform.system() == "Windows":
     import winsound
     import winreg
 
+# Some launchers set NoDefaultCurrentDirectoryInExePath, which stops cmd.exe finding FaceFXWrapper.exe in the
+# current folder (no .lip file is made, and the error is hidden). Clear it for our child processes.
+os.environ.pop('NoDefaultCurrentDirectoryInExePath', None)
+
 def get_logger():
     return logging.getLogger("Mantella")
 

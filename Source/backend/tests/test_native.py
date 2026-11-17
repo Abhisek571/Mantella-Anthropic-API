@@ -77,6 +77,14 @@ check('thinking passed', req['extra_body'].get('thinking') == {'type': 'between_
 check('openrouter provider dropped', 'provider' not in req['extra_body'])
 check('fallbacks for sonnet 5.5', req['extra_body'].get('fallbacks') == 'default' and req['extra_headers']['anthropic-beta'] == native.FALLBACK_BETA)
 check('tools sorted + converted', [t['name'] for t in req['tools']] == ['Alpha', 'Zeta'] and 'input_schema' in req['tools'][0])
+# the reply after an action result: same tools (cached prefix unchanged), tool_choice none, nothing else different
+req_none = native.build_request('claude-sonnet-5-5', msgs[:2], params, tools, {}, cache=True, no_tool_use=True)
+check('no_tool_use: tool_choice none', req_none.get('tool_choice') == {'type': 'none'}, req_none.get('tool_choice'))
+check('no_tool_use: tools byte-identical to a normal reply', json.dumps(req_none['tools'], sort_keys=True) == json.dumps(req['tools'], sort_keys=True))
+check('no_tool_use: system identical to a normal reply', json.dumps(req_none['system'], sort_keys=True) == json.dumps(req['system'], sort_keys=True))
+check('no_tool_use: only tool_choice added', {k: v for k, v in req_none.items() if k != 'tool_choice'} == req)
+check('normal reply: no tool_choice sent', 'tool_choice' not in req)
+check('no_tool_use without tools: no tool_choice', 'tool_choice' not in native.build_request('claude-sonnet-5-5', msgs[:2], params, None, {}, cache=True, no_tool_use=True))
 req_h = native.build_request('claude-haiku-5-5', msgs[:2], None, None, {}, cache=False)
 check('no fallbacks for haiku', 'extra_headers' not in req_h and 'fallbacks' not in req_h.get('extra_body', {}))
 check('no cache when off', 'cache_control' not in req_h['system'][-1] and 'extra_body' not in req_h)
@@ -181,6 +189,107 @@ check('cache points after the stable part and after respond', [('cache_control' 
 check('two system cache points still within 4', sum('cache_control' in b for b in req_o['system']) + sum('cache_control' in b for m in req_o['messages'] for b in m['content']) <= 4)
 check('joined text for other services', native.join_system_parts(ordered_hook, 'x') == 'Rules.\n\nBio.\n\nMemory.\n\nRespond.\n\nExtra.')
 check('join keeps the stock text when the hook fails', native.join_system_parts(lambda parts: 1 / 0, 'Stock.') == 'Stock.')
+
+# ---------- cache layout: shared part, NPC part, end of the prompt, newest message (at most 4 points) ----------
+def marks(req):
+    """Which blocks carry a cache point: ('tools', i) / ('system', i) / ('messages', i, j)."""
+    out = [('tools', i) for i, t in enumerate(req.get('tools') or []) if 'cache_control' in t]
+    out += [('system', i) for i, b in enumerate(req.get('system') or []) if 'cache_control' in b]
+    out += [('messages', i, j) for i, m in enumerate(req['messages']) for j, b in enumerate(m['content']) if 'cache_control' in b]
+    return out
+
+def big_tools(n=30):
+    return [{'type': 'function', 'function': {'name': f'Action{i:02d}', 'description': 'Does a thing in the world. ' * 8, 'parameters': {
+        'type': 'object', 'properties': {'target': {'type': 'string', 'description': 'Who it is done to.'}}}}} for i in range(n)]
+
+RULES = 'What you wear is your own choice. ' * 60          # same for every NPC
+def hub_hook(name, memory):
+    """Like the Integration Hub: rules shared by all NPCs, this NPC's fixed text, memory, reply instruction."""
+    return lambda parts: {'prompt_rules': RULES, 'mantella_rules': f'# Rules\nSpeak only as {name}.',
+                          'overview': f'# Overview\nYou are {name} in Skyrim. ' + 'A Nord warrior of Riverwood. ' * 80,
+                          'history': '# History\n' + memory, 'respond': f'Respond as {name} now in English.',
+                          '__order__': ['prompt_rules', 'mantella_rules', 'overview', 'history', 'respond'],
+                          '__breakpoints_after__': [['prompt_rules'], ['overview'], 'respond']}
+
+talk_m = [{'role': 'system', 'content': 'stock'}, {'role': 'user', 'content': 'Hello'}, {'role': 'assistant', 'content': 'Well met.'},
+          {'role': 'user', 'content': [{'type': 'text', 'text': 'Is Riverwood safe?'}, shot]}]
+req_m = native.build_request('claude-sonnet-5-5', talk_m, None, big_tools(), {}, cache=True, system_parts=hub_hook('Mjoll', '[Day 2] We fished.'),
+                             extra_texts=['Current scene: Riverwood. The time is 12 in the afternoon.'])
+check('block order: shared rules first, then the NPC, memory, reply instruction', [b['text'][:12] for b in req_m['system']] ==
+      [RULES[:12], '# Rules\nSpea', '# Overview\nY', '# History\n[D', 'Respond as M'], [b['text'][:12] for b in req_m['system']])
+check('cache points: shared part, NPC part, end of the prompt, newest message', marks(req_m) == [('system', 0), ('system', 2), ('system', 4), ('messages', 2, 0)], marks(req_m))
+check('at most 4 cache points (shared, NPC, end, newest)', len(marks(req_m)) == 4)
+# the shared cached prefix (actions + Living World rules) is byte-identical for another NPC with the same actions
+req_l = native.build_request('claude-sonnet-5-5', talk_m, None, big_tools(), {}, cache=True, system_parts=hub_hook('Lydia', ''))
+strip = lambda v: json.dumps(v, sort_keys=True).replace(', "cache_control": {"type": "ephemeral"}', '')
+check('shared part is the same for another NPC', strip(req_l['tools']) == strip(req_m['tools']) and strip(req_l['system'][0]) == strip(req_m['system'][0]))
+check('NPC-specific text comes after the shared cache point', all('Mjoll' not in json.dumps(x) for x in (req_m['tools'], req_m['system'][0])))
+# nothing that changes during a talk sits before a cache point: the scene goes after the last one
+def cached_prefix(req):
+    flat = [('t', t) for t in req.get('tools') or []] + [('s', b) for b in req.get('system') or []] + \
+           [('m', b) for m in req['messages'] for b in m['content']]
+    last = max(i for i, (_, b) in enumerate(flat) if 'cache_control' in b)
+    return json.dumps([b for _, b in flat[:last + 1]])
+check('scene after the last cache point', 'The time is' not in cached_prefix(req_m) and 'The time is' in json.dumps(req_m['messages'][-1]))
+# stock Mantella without extensions: its '# Current Scene' section leaves the cached system prompt for the newest message
+STOCK = ('# Overview\nYou are Mjoll in Skyrim.\n\n# Background\nVega is a Nord.\n\n# History\n\n\n# Current Scene\n'
+         'You are now in Riverwood. The time is {hour} in the afternoon. \n\n# Rules\nStay in character.\n\nRespond as Mjoll now in English.')
+stock_turn = lambda hour: [{'role': 'system', 'content': STOCK.format(hour=hour)}] + talk_m[1:]
+req_s1 = native.build_request('claude-sonnet-5-5', stock_turn(1), None, None, {}, cache=True)
+req_s2 = native.build_request('claude-sonnet-5-5', stock_turn(2), None, None, {}, cache=True)
+check('stock prompt: scene taken out of the system prompt', 'Riverwood' not in req_s1['system'][0]['text'] and '# Rules\nStay in character.' in req_s1['system'][0]['text']
+      and '# History\n\n# Rules' in req_s1['system'][0]['text'], req_s1['system'][0]['text'])
+check('stock prompt: system prompt the same when the hour turns', req_s1['system'] == req_s2['system'])
+check('stock prompt: scene in the newest message, after its cache point', req_s1['messages'][-1]['content'][-1] == {'type': 'text', 'text': 'Current scene: You are now in Riverwood. The time is 1 in the afternoon.'}
+      and 'Riverwood. The time' not in cached_prefix(req_s1), req_s1['messages'][-1])
+req_s_off = native.build_request('claude-sonnet-5-5', stock_turn(1), None, None, {}, cache=False)
+check('cache off: prompt sent as Mantella wrote it', req_s_off['system'][0]['text'] == STOCK.format(hour=1).strip() and 'cache_control' not in json.dumps(req_s_off), req_s_off['system'])
+check('no scene section: system text unchanged', native.build_request('claude-sonnet-5-5', talk, None, None, {}, cache=True)['system'][0]['text'] == 'You are a knight.')
+# without extensions, a long action list gets its own cache point (shared by NPCs with the same actions)
+req_t = native.build_request('claude-sonnet-5-5', talk_m, None, big_tools(), {}, cache=True)
+check('no extension: newest, end of system, end of actions, last NPC reply', marks(req_t) == [('tools', len(req_t['tools']) - 1), ('system', 0), ('messages', 1, 0), ('messages', 2, 0)], marks(req_t))
+# a point whose prefix is too short to be cached only fills a spare slot
+short_hook = lambda parts: dict(hub_hook('Mjoll', 'x')(parts), prompt_rules='Be brief.')
+req_short = native.build_request('claude-sonnet-5-5', talk_m, None, None, {}, cache=True, system_parts=short_hook)
+check('short shared part loses its slot to the last NPC reply', marks(req_short) == [('system', 2), ('system', 4), ('messages', 1, 0), ('messages', 2, 0)], marks(req_short))
+check('minimum by model', native.cache_minimum('claude-sonnet-5-5') == 512 and native.cache_minimum('claude-haiku-4-5') == 4096
+      and native.cache_minimum('claude-sonnet-5') == 1024 and native.cache_minimum('some-model') == 1024)
+# 1-hour cache setting: every point gets the same ttl (a longer ttl may not follow a shorter one)
+native.long_cache = True
+try:
+    req_1h = native.build_request('claude-sonnet-5-5', talk_m, None, big_tools(), {}, cache=True, system_parts=hub_hook('Mjoll', 'x'))
+finally:
+    native.long_cache = False
+controls = [b['cache_control'] for b in (req_1h.get('tools') or []) + req_1h['system'] + [b for m in req_1h['messages'] for b in m['content']] if 'cache_control' in b]
+check('1-hour cache: ttl 1h on every point', len(controls) == 4 and all(c == {'type': 'ephemeral', 'ttl': '1h'} for c in controls), controls)
+def controls_in_order(req):
+    return [b['cache_control'] for b in (req.get('tools') or []) + req['system'] + [b for m in req['messages'] for b in m['content']] if 'cache_control' in b]
+default = controls_in_order(req_m)
+check('default: the shared part (first system point) keeps 1 hour, every other point 5 minutes with no ttl field',
+      default[0] == {'type': 'ephemeral', 'ttl': '1h'} and all(c == {'type': 'ephemeral'} for c in default[1:]) and len(default) == 4, default)
+long_first = lambda cs: all('ttl' in c for c in cs[:sum('ttl' in c for c in cs)])
+req_t1h = native.build_request('claude-sonnet-5-5', talk_m, None, big_tools(), {}, cache=True, system_parts=hub_hook('Mjoll', 'x'))
+check('every 1-hour point comes before any 5-minute point (Anthropic: a longer ttl may not follow a shorter one)',
+      long_first(default) and long_first(controls_in_order(req_t1h)) and long_first(controls_in_order(req_t)), controls_in_order(req_t1h))
+native.shared_long_cache = False
+try:
+    req_5m = native.build_request('claude-sonnet-5-5', talk_m, None, big_tools(), {}, cache=True, system_parts=hub_hook('Mjoll', '[Day 2] We fished.'))
+finally:
+    native.shared_long_cache = True
+check('shared-part setting off: 5-minute cache everywhere, no ttl field', all(c == {'type': 'ephemeral'} for c in controls_in_order(req_5m)),
+      controls_in_order(req_5m))
+one_point = native.build_request('claude-sonnet-5-5', talk, None, None, {}, cache=True)
+check('a prompt with one system point and no actions (no shared part of its own): 5 minutes',
+      all(c == {'type': 'ephemeral'} for c in controls_in_order(one_point)), controls_in_order(one_point))
+check('1-hour setting does not touch requests without caching', 'cache_control' not in json.dumps(native.build_request('claude-sonnet-5-5', talk_m, None, big_tools(), {}, cache=False)))
+# usage log: cache points listed, 1-hour writes priced at twice the input price
+st1 = native.StreamState()
+st1.points = native.cache_points(req_m)
+st1.handle({'type': 'message_start', 'message': {'usage': {'cache_read_input_tokens': 900, 'cache_creation_input_tokens': 300, 'input_tokens': 50,
+                                                             'cache_creation': {'ephemeral_1h_input_tokens': 300, 'ephemeral_5m_input_tokens': 0}}}})
+check('cache points rise in prompt order', len(st1.points) == 4 and st1.points == sorted(st1.points) and st1.points[0] > 1000, st1.points)
+check('1-hour writes recorded', st1.usage == {'cache_read': 900, 'cache_write': 300, 'uncached': 50, 'cache_write_1h': 300}, st1.usage)
+check('1-hour writes cost 2x input', abs(native.reply_cost('claude-sonnet-5-5', {'cache_write': 300, 'cache_write_1h': 300}) - 300 * 4.00 / 1e6) < 1e-12)
 st = native.StreamState()
 st.handle({'type': 'message_start', 'message': {'usage': {'cache_read_input_tokens': 4512, 'cache_creation_input_tokens': 84, 'input_tokens': 790}}})
 st.handle({'type': 'message_delta', 'delta': {'stop_reason': 'end_turn'}, 'usage': {'output_tokens': 41}})
@@ -256,14 +365,14 @@ FALLBACK = [start(model='claude-sonnet-5'),
 
 REFUSAL = [start(), ] + stop('refusal')
 
-async def run(events, store, extra_texts=None):
+async def run(events, store, extra_texts=None, no_tool_use=False):
     SCENARIO['events'] = events
     client = anthropic.AsyncAnthropic(api_key='test-key', base_url=BASE, max_retries=0)
     state = native.StreamState()
     texts = []
     try:
         request = native.build_request('claude-sonnet-5-5', msgs[:2], {'extra_body': {'thinking': {'type': 'between_tools'}}}, tools, store, cache=True,
-                                        extra_texts=extra_texts)
+                                        extra_texts=extra_texts, no_tool_use=no_tool_use)
         async for t in native.stream_reply(client, request, store, state):
             texts.append(t)
     finally:
@@ -300,6 +409,15 @@ check('fallback block handled', ''.join(texts) == 'Fine.' and state.fell_back_to
 
 texts, state = asyncio.run(run(REFUSAL, {}))
 check('refusal = empty, no crash', texts == [] and state.stop_reason == 'refusal' and not state.got_text)
+
+# the reply after an action result, on the wire: same tools as a normal reply, tool_choice none
+asyncio.run(run(FALLBACK, {}))
+normal_body = REQUESTS[-1]['body']
+texts, state = asyncio.run(run(FALLBACK, {}, no_tool_use=True))
+none_body = REQUESTS[-1]['body']
+check('wire: tool_choice none sent', none_body.get('tool_choice') == {'type': 'none'}, none_body.get('tool_choice'))
+check('wire: tools and system identical to a normal reply', none_body['tools'] == normal_body['tools'] and none_body['system'] == normal_body['system'] and 'tool_choice' not in normal_body)
+check('wire: text still streamed', ''.join(texts) == 'Fine.', texts)
 
 # T-10: a reply cut off by max_tokens keeps its text but drops its tool calls (their arguments may be incomplete)
 cut_store = {}

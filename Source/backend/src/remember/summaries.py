@@ -66,6 +66,11 @@ class Summaries(Remembering):
         self.__language_name: str = language_name
         self.__memory_prompt: str = config.memory_prompt
         self.__resummarize_prompt: str = config.resummarize_prompt
+        self.__game_days: float | None = None
+
+    def note_game_days(self, game_days: float | None) -> None:
+        """The game time of the newest update from the game (None when it sent none), for the memory_text hook."""
+        self.__game_days = game_days
 
     def __read_summary_lines(self, file_path: str, deduplicate: bool = False) -> list[str]:
         """Read a summary file and return non-empty stripped lines.
@@ -111,7 +116,8 @@ class Summaries(Remembering):
             character_memories.append(memory)
 
         text = f"Below is a summary of past events:\n" + "\n\n".join(character_memories) if character_memories else ""
-        return src_extensions.registry().filter('memory_text', text, {'characters': characters, 'world_id': world_id, 'summaries': self})
+        return src_extensions.registry().filter('memory_text', text, {'characters': characters, 'world_id': world_id, 'summaries': self,
+                                                                      'game_days': self.__game_days})
 
     @utils.time_it
     def save_conversation_state(self, messages: message_thread, npcs_to_summarize: list[Character], npcs_in_conversation: Characters, world_id: str, is_reload=False, pending_shares: list[tuple[str, str, str]] | None = None, end_timestamp: float | None = None, is_radiant: bool = False, departed: bool = False):

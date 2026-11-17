@@ -152,5 +152,19 @@ check('end of talk: neither', end['is_reload'] is False and end['departed'] is F
 conv_src = (BACKEND / 'src/conversation/conversation.py').read_text(encoding='utf-8')
 check('departures pass departed to the save', 'departed=departed_npcs is not None' in conv_src)
 
+# live test 4: the talk's memory text is built before the game writes the new talk's counter, so after an older save is
+# loaded the extension needs Mantella's own game time of that request to tell which memories the loaded save has
+Summ2 = load_methods('src/remember/summaries.py', 'Summaries', {'get_prompt_text', 'note_game_days'}, {'src_extensions': sys.modules['src.extensions'], 'Character': object})
+summ2 = Summ2.__new__(Summ2)
+summ2._Summaries__get_latest_conversation_summary_file_path = lambda name, ref, world: ''
+summ2._Summaries__read_summary_lines = lambda path, deduplicate=False: []
+summ2._Summaries__game_days = None
+summ2.note_game_days(3.25)
+REG.ctx.clear()
+summ2.get_prompt_text([NS(name='Gerdur', ref_id=1)], 'w')
+mem_ctx = REG.ctx[0][1] if REG.ctx and REG.ctx[0][0] == 'memory_text' else {}
+check('memory_text: the hook is given the game time of the request', mem_ctx.get('game_days') == 3.25, mem_ctx)
+check('the conversation passes the game time of each update to the summaries', 'note_game_days' in conv_src and 'note(game_days)' in conv_src)
+
 print('RESULT: ' + ('ALL PASS' if not FAILS else f'{len(FAILS)} FAILED: {FAILS}'))
 sys.exit(1 if FAILS else 0)

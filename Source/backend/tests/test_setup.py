@@ -20,6 +20,26 @@ for name in ('src.conversation.conversation', 'src.game_manager', 'src.http.comm
     check(f'{name} replaced', name in S.MODULES and (BACKEND / S.MODULES[name]).is_file() and (ROOT / 'Source/upstream' / S.MODULES[name]).is_file())
 check('dual_input module added', 'src.dual_input' in S.NEW_MODULES and (BACKEND / S.NEW_MODULES['src.dual_input']).is_file())
 
+# test_long_cache_setting: "Anthropic: 1-Hour Cache" is a real setting in the LLM tab, off by default, read by the route
+defs = 'src.config.mantella_config_value_definitions_new'
+check('settings list replaced', defs in S.MODULES and (ROOT / 'Source/upstream' / S.MODULES[defs]).is_file())
+registered = (BACKEND / S.MODULES[defs]).read_text(encoding='utf-8')
+stock = (ROOT / 'Source/upstream' / S.MODULES[defs]).read_text(encoding='utf-8')
+check('1-hour cache added to the LLM tab, after Claude Prompt Caching', 'get_claude_prompt_caching_config_value())\n        llm_category.add_config_value(LLMDefinitions.get_anthropic_long_cache_config_value())' in registered)
+check('...then the 1-hour cache for the shared part', 'get_anthropic_long_cache_config_value())\n        llm_category.add_config_value(LLMDefinitions.get_anthropic_shared_long_cache_config_value())' in registered)
+check('settings list: nothing else changed', registered.replace('        llm_category.add_config_value(LLMDefinitions.get_anthropic_long_cache_config_value())\n', '')
+      .replace('        llm_category.add_config_value(LLMDefinitions.get_anthropic_shared_long_cache_config_value())\n', '') == stock)
+llm_defs = ast.parse((BACKEND / 'src/config/definitions/llm_definitions.py').read_text(encoding='utf-8'))
+getter = next(f for f in ast.walk(llm_defs) if isinstance(f, ast.FunctionDef) and f.name == 'get_anthropic_long_cache_config_value')
+call = next(n for n in ast.walk(getter) if isinstance(n, ast.Call) and getattr(n.func, 'id', '') == 'ConfigValueBool')
+check('1-hour cache: bool, key anthropic_long_cache, off by default', call.args[0].value == 'anthropic_long_cache' and call.args[3].value is False, ast.dump(call)[:200])
+check('route reads the setting', 'get_bool_value("anthropic_long_cache")' in (BACKEND / 'src/http/routes/mantella_route.py').read_text(encoding='utf-8'))
+getter = next(f for f in ast.walk(llm_defs) if isinstance(f, ast.FunctionDef) and f.name == 'get_anthropic_shared_long_cache_config_value')
+call = next(n for n in ast.walk(getter) if isinstance(n, ast.Call) and getattr(n.func, 'id', '') == 'ConfigValueBool')
+check('shared-part 1-hour cache: bool, key anthropic_shared_long_cache, on by default',
+      call.args[0].value == 'anthropic_shared_long_cache' and call.args[3].value is True, ast.dump(call)[:200])
+check('route reads that setting too', 'get_bool_value("anthropic_shared_long_cache")' in (BACKEND / 'src/http/routes/mantella_route.py').read_text(encoding='utf-8'))
+
 # test_only_stock_base: the patch builds from stock Mantella 0.14 only (Dual Input is now inside it)
 contract = json.loads((BACKEND / 'build-contract.json').read_text(encoding='utf-8'))
 check('only the stock base', [b['name'] for b in contract['bases'].values()] == ['Mantella 0.14'], [b['name'] for b in contract['bases'].values()])
