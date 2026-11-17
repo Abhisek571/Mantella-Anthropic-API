@@ -222,5 +222,14 @@ check('the route keeps the earlier wait instead of always clearing it',
       'talk._Conversation__awaiting_action_result = awaits_action_result(was_awaiting, reply)' in route_src
       and 'talk._Conversation__awaiting_action_result = False' not in route_src)
 
+# a group / radiant talk keeps the player's own reply limit (by either name), raised to 250 at least, in one key
+cb = load('src/llm/client_base.py', {'GROUP_MIN_TOKENS', 'token_limit', 'group_max_tokens'}, {})
+group = cb['group_max_tokens']
+check('group talk: max_completion_tokens 1000 stays 1000, with no second max_tokens',
+      group({'max_completion_tokens': 1000}) == {'max_completion_tokens': 1000})
+check('group talk: a low limit is raised to 250 in the key the player used', group({'max_completion_tokens': 100}) == {'max_completion_tokens': 250}
+      and group({'max_tokens': 120}) == {'max_tokens': 250} and group({}) == {'max_tokens': 250})
+check('group talk: max_tokens wins when both are set', group({'max_tokens': 800, 'max_completion_tokens': 100}) == {'max_tokens': 800, 'max_completion_tokens': 100})
+
 print('RESULT:' + ('ALL PASS' if not FAILS else f'{len(FAILS)} FAILED: {FAILS}'))
 sys.exit(1 if FAILS else 0)

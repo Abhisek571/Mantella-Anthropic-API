@@ -300,6 +300,12 @@ def build_flows(root=ROOT, timeout=FLOWS_TIMEOUT):
     return None
 
 
+def under_vortex(root: Path) -> bool:
+    """Setup runs from a Vortex staging folder (...\\Vortex\\<game>\\mods\\<mod>), not from an MO2 mod folder."""
+    parts = [p.lower() for p in Path(root).parts]
+    return any(parts[i] == 'vortex' and parts[i + 2] == 'mods' for i in range(len(parts) - 2))
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
@@ -309,14 +315,21 @@ def main():
     args = parser.parse_args()
     base = args.base or find_base()
     if base is None:
-        raw = input('Full path to Mantella.exe (from the Mantella mod): ').strip().strip('"')
+        try:
+            raw = input('Full path to Mantella.exe (from the Mantella mod): ').strip().strip('"')
+        except EOFError:  # run with no keyboard input (from a script or tool)
+            raw = ''
         if not raw:
             raise ValueError('No executable selected. Nothing changed.')
         base = Path(raw)
     report = build(base, args.output, write_contract=args.write_contract)
     print('Patched: ' + report['base_name'] + ' (' + str(base) + ')')
     print('Mantella - Direct AI Connect backend ready: ' + str(args.output))
-    print('In MO2\'s left pane, place this mod AFTER (below) Mantella, so its Mantella.exe and scripts win.')
+    if under_vortex(ROOT):
+        print('Vortex: press Deploy now. If Vortex reports a file conflict, set the rule "Mantella - Direct AI Connect '
+              'loads after Mantella", so its Mantella.exe and scripts win.')
+    else:
+        print('In MO2\'s left pane, place this mod AFTER (below) Mantella, so its Mantella.exe and scripts win.')
     print('Dual Input is included: turn off the separate Mantella Dual Input mod if you have it.')
     print('Your original files and settings were not changed.')
     build_flows()

@@ -42,6 +42,16 @@ INSTALL WITH MO2
    Large Language Model tab, set LLM Service to "Anthropic (Native, cached)" (or "Anthropic (Official)"),
    press Update and choose a model. Start a NEW conversation.
 
+INSTALL WITH VORTEX
+1. Close Skyrim and Mantella. Install this ZIP as its own mod with Vortex.
+2. In Vortex, open this mod's staging folder (Open in File Manager) and run Setup Backend.cmd
+   there, not in the game's Data folder. Setup finds Mantella.exe in Mantella's staging folder.
+3. Wait for "backend ready", then press Deploy. Setup writes the new Mantella.exe into the
+   staging folder; the game only gets it after Deploy.
+4. If Vortex reports a file conflict with Mantella, set the rule "Mantella - Direct AI Connect
+   loads after Mantella" and Deploy again, so this mod's Mantella.exe and Scripts win.
+5. Then follow steps 5 and 6 of the MO2 section (API key file, LLM Service).
+
 If setup says "unsupported", STOP. Do not edit the hash check or overwrite the original.
 If Python is missing or older than 3.11.9, install Python 3.11.9 and rerun Setup Backend.cmd.
 Advanced setup: py -3.11 setup_backend.py --base "C:\path\to\Mantella.exe"

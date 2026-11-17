@@ -126,6 +126,16 @@ check('model list shows the cache price', 'input_cache_read' in cb and 'Cache re
 ext_source = (BACKEND / 'src/extensions.py').read_text(encoding='utf-8')
 check("'conversation_limit' is a known hook", "'conversation_limit'" in ext_source.split('HOOKS =', 1)[1].split('\n', 1)[0])
 
+# Vortex: setup run from a Vortex staging folder says to Deploy (an MO2 folder keeps the MO2 line); no stdin is no crash
+check('setup knows a Vortex staging folder', S.under_vortex(Path('C:/Users/x/AppData/Roaming/Vortex/skyrimse/mods/Mantella - Direct AI Connect'))
+      and not S.under_vortex(Path('C:/Games/MO2/mods/Mantella - Direct AI Connect')))
+setup_src = (ROOT / 'setup_backend.py').read_text(encoding='utf-8')
+check('setup tells a Vortex user to Deploy', 'press Deploy' in setup_src and 'INSTALL WITH VORTEX' in (ROOT / 'INSTALL.txt').read_text(encoding='utf-8'))
+check('setup with no keyboard input stops with its own message', 'except EOFError' in setup_src)
+notice = ' '.join((ROOT / 'SOURCE-AND-LICENSES.txt').read_text(encoding='utf-8').split())
+check('the source notice names every changed module', all(rel in notice for rel in S.MODULES.values()),
+      [rel for rel in S.MODULES.values() if rel not in notice])
+
 # A13: a running Mantella.exe gives a clear message (not a raw [WinError 5]); the original exe is also found in
 # Vortex's staging folder; an already patched exe given as the base is named as such.
 import hashlib, os

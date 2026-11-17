@@ -31,7 +31,9 @@ Source/upstream holds the unmodified v0.14 file for every changed module (see MO
 setup_backend.py): src/utils.py, src/llm/client_base.py, src/config/definitions/llm_definitions.py,
 src/config/definitions/vision_definitions.py, src/config/definitions/action_definitions.py,
 src/http/routes/mantella_route.py, src/remember/summaries.py, src/ui/start_ui.py,
-src/conversation/conversation.py, src/game_manager.py, src/http/communication_constants.py.
+src/conversation/conversation.py, src/game_manager.py, src/http/communication_constants.py,
+src/tts/xtts.py, src/config/definitions/tts_definitions.py,
+src/config/mantella_config_value_definitions_new.py.
 Source/backend/src holds the modified versions.
 
 BUILDING
