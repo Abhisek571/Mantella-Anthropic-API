@@ -1,3 +1,6 @@
+import asyncio
+import contextlib
+import threading
 from threading import Lock
 from typing import AsyncGenerator, Any
 from enum import Enum
@@ -24,6 +27,10 @@ import src.extensions as src_extensions
 
 logger = utils.get_logger()
 
+# Set on the thread that runs the server_actions hook: a one-shot helper call made from it does not wait for the
+# generation lock, which the reply that called the hook is holding (waiting for it would never end)
+_hook_thread = threading.local()
+
 
 def _tool_name(item) -> str:
     """The name of an OpenAI-style tool or tool call, as a dict or an SDK object."""
@@ -42,6 +49,12 @@ def only_offered(tool_calls: list, tools: list | None) -> list:
         if _tool_name(call) not in offered:
             logger.warning(f"Ignored a call to action '{_tool_name(call)}': it was not offered for this reply")
     return kept
+
+
+class NoToolUse(list):
+    """The actions of a reply that must not call one (the answer after an action's result). Anthropic (Native) still
+    sends them, with tool_choice none, so the cached prefix stays the same as on the other replies; every other
+    service gets no tools, as before."""
 
 
 def read_key_text(path) -> str:
@@ -241,7 +254,7 @@ class ClientBase(AIClient):
         """One-shot (non-streamed) request through the Messages API, used for summaries. An outage (rate limit,
         overloaded, lost connection) is tried again a few times, as Mantella does for its other services."""
         from src.llm import anthropic_native
-        with self._generation_lock:
+        with self._one_shot_lock():
             logger.log(28, 'Getting LLM response...')
             if isinstance(messages, Message) or isinstance(messages, ImageMessage):
                 openai_messages = [messages.get_openai_message()]
@@ -273,7 +286,7 @@ class ClientBase(AIClient):
         Returns:
             The full chat completion object or None if the request failed
         """
-        with self._generation_lock:
+        with self._one_shot_lock():
             sync_client = self.generate_sync_client()        
             chat_completion: ChatCompletion = None
             logger.log(28, 'Getting LLM response...')
@@ -309,6 +322,11 @@ class ClientBase(AIClient):
 
             return chat_completion
 
+
+    def _one_shot_lock(self):
+        """The generation lock for a one-shot request; none on the server_actions hook's own thread (each one-shot
+        request builds its own client, so it needs no lock there)."""
+        return contextlib.nullcontext() if getattr(_hook_thread, 'active', False) else self._generation_lock
 
     @utils.time_it
     def request_call(self, messages: Message | message_thread) -> str | None:
@@ -368,6 +386,13 @@ class ClientBase(AIClient):
                             logger.warning("Vision tool called but Vision not enabled in config - ignoring")
                         self._enable_vision_next_call = False  # Reset flag after use
 
+                    # An answer after an action result: Anthropic (Native) keeps the tools for the cache (tool_choice
+                    # none); the other services, and a separate function LLM, get none as before
+                    no_tool_use = isinstance(tools, NoToolUse)
+                    generated_tools = list(tools or [])
+                    if no_tool_use and (not self._is_native or self._function_client):
+                        tools = None
+
                     # Extensions (none installed = no change): trim the actions, add text after the cache point
                     extensions = src_extensions.registry()
                     ext_ctx = {'model': self.model_name, 'is_multi_npc': is_multi_npc, 'messages': openai_messages}
@@ -375,9 +400,20 @@ class ClientBase(AIClient):
                         tools = extensions.filter('filter_tools', tools, ext_ctx)
                     extra_texts = extensions.collect('extra_user_text', ext_ctx)
 
+                    # Actions an extension builds itself for this reply (never the model's choice), sent to the game
+                    # first; the model then only speaks (no action calls of its own on this reply)
+                    server_calls = await self._server_actions_bounded(extensions, generated_tools, ext_ctx)
+                    if server_calls:
+                        yield ("tool_calls", server_calls)
+                        no_tool_use = True
+                        if not self._is_native or self._function_client:
+                            tools = None
+
                     # Handle tool calling: use dedicated function client if available, otherwise use main LLM
                     offered_tools = None
-                    if tools:
+                    if tools and no_tool_use:
+                        offered_tools = tools
+                    elif tools:
                         if self._function_client:
                             pre_fetched_tool_calls = only_offered(self._function_client.check_for_actions(messages, tools) or [], tools)
                             if pre_fetched_tool_calls:
@@ -390,7 +426,8 @@ class ClientBase(AIClient):
                     failure = None
                     for link in self._reply_chain():
                         try:
-                            prepared = link._prepare_attempt(openai_messages, offered_tools, is_multi_npc, extra_texts, extensions, ext_ctx)
+                            prepared = link._prepare_attempt(openai_messages, offered_tools, is_multi_npc, extra_texts, extensions, ext_ctx,
+                                                             no_tool_use=no_tool_use)
                         except Exception as e:
                             if link is self:
                                 raise
@@ -471,6 +508,54 @@ class ClientBase(AIClient):
                     else:
                         logger.error(f"LLM API Streaming Error: {e}")
 
+    @staticmethod
+    def _server_actions(extensions, generated_tools: list, ext_ctx: dict) -> list:
+        """Tool calls (OpenAI form) the server_actions extensions return for this reply, kept only for actions Mantella
+        generated for it; any failure gives none."""
+        if not generated_tools or not extensions.has('server_actions'):
+            return []
+        calls = []
+        for result in extensions.collect('server_actions', generated_tools, ext_ctx):
+            calls.extend(c for c in (result if isinstance(result, list) else [result]) if isinstance(c, dict) and isinstance(c.get('function'), dict))
+        calls = only_offered(calls, generated_tools)
+        if calls:
+            logger.log(23, f"Extension action(s) for this reply: {', '.join(_tool_name(c) for c in calls)}")
+        return calls
+
+    SERVER_ACTION_SECONDS = 20.0
+
+    async def _server_actions_bounded(self, extensions, generated_tools: list, ext_ctx: dict) -> list:
+        """_server_actions on its own thread, so a helper model call inside a hook neither blocks the server's event
+        loop nor waits for the generation lock this reply holds; after SERVER_ACTION_SECONDS the reply goes on without
+        them."""
+        if not generated_tools or not extensions.has('server_actions'):
+            return []
+        loop = asyncio.get_running_loop()
+        done = loop.create_future()
+
+        def finish(result):
+            if not done.done():
+                done.set_result(result)
+
+        def work():
+            _hook_thread.active = True
+            try:
+                result = self._server_actions(extensions, generated_tools, ext_ctx)
+            except Exception as e:
+                logger.warning(f"Extension actions failed: {e}")
+                result = []
+            try:
+                loop.call_soon_threadsafe(finish, result)
+            except RuntimeError:
+                pass  # the reply is long over
+
+        threading.Thread(target=work, name='server-actions', daemon=True).start()
+        try:
+            return await asyncio.wait_for(done, self.SERVER_ACTION_SECONDS)
+        except asyncio.TimeoutError:
+            logger.warning(f"Extension actions took longer than {self.SERVER_ACTION_SECONDS:g} seconds; this reply goes on without them")
+            return []
+
     def _reply_chain(self):
         """This client, then a client per fallback model that can be used, built when first needed."""
         yield self
@@ -501,8 +586,12 @@ class ClientBase(AIClient):
         client._stall_seconds = reliability.stall_limit(self._reliability, client.is_local)
         return client
 
-    def _prepare_attempt(self, base_messages: list[dict], tools: list[dict] | None, is_multi_npc: bool, extra_texts: list[str], extensions, ext_ctx: dict) -> tuple:
-        """(messages, request parameters, Messages API request or None) in the form this client's service takes."""
+    def _prepare_attempt(self, base_messages: list[dict], tools: list[dict] | None, is_multi_npc: bool, extra_texts: list[str], extensions, ext_ctx: dict,
+                         no_tool_use: bool = False) -> tuple:
+        """(messages, request parameters, Messages API request or None) in the form this client's service takes.
+        no_tool_use: this reply must not call an action; only Anthropic (Native) still sends the tools (tool_choice none)."""
+        if no_tool_use and not self._is_native:
+            tools = None
         if self._request_params:
             request_params = self._request_params.copy() # copy of self._request_params to allow temporary override
         else:
@@ -531,7 +620,8 @@ class ClientBase(AIClient):
             system_parts = (lambda parts: extensions.filter('system_parts', parts, ext_ctx)) if extensions.has('system_parts') else None
             native_request = anthropic_native.build_request(self.model_name, openai_messages, request_params,
                                                             request_params.get("tools"), self._thinking_by_tool_call, cache=True,
-                                                            extra_texts=extra_texts, system_parts=system_parts)
+                                                            extra_texts=extra_texts, system_parts=system_parts,
+                                                            no_tool_use=no_tool_use)
         return openai_messages, request_params, native_request
 
     async def _stream_attempt(self, openai_messages: list[dict], request_params: dict[str, Any], native_request: dict[str, Any] | None,
@@ -559,6 +649,10 @@ class ClientBase(AIClient):
             attempt.detail = f"stop_reason={state.stop_reason}, stop_sequence={state.stop_sequence!r}"
             if attempt.stalled and not attempt.spoke:
                 return  # asked again: its finished tool calls will come again
+            if (native_request.get('tool_choice') or {}).get('type') == 'none' and state.tool_calls:
+                # tool_choice none should make this impossible; never run an action on a reply that may not call one
+                logger.warning(f"Ignored {len(state.tool_calls)} action call(s) on a reply that may not call actions")
+                state.tool_calls.clear()
             attempt.got_calls = bool(state.tool_calls)
             offered_calls = only_offered(list(state.tool_calls), request_params.get("tools"))
             if offered_calls:

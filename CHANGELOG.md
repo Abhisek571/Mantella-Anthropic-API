@@ -2,6 +2,24 @@
 
 Every change to Mantella - Direct AI Connect. The Nexus page lists only the main changes for each version.
 
+## Unreleased
+
+### New
+- Anthropic (Native, cached): up to 4 cache points placed by value: the newest message, the system prompt's own points (with Mantella Living World: the part every NPC shares, the NPC's fixed text, the end), the end of the action list, the last NPC reply. The action list and shared rules are read from the cache when you start talking to another NPC with the same actions within 5 minutes; before, the first reply of every talk wrote the whole prompt to the cache again.
+- Without extensions, Mantella's "Current Scene" section (place, time, weather) moves from the system prompt to the newest message, so the cached prompt no longer has to be written again when the in-game hour turns.
+- A cache point on a part too short for the model to cache only takes a slot nothing else needs.
+- New setting "Anthropic: 1-Hour Cache" (LLM tab, advanced, off by default): keeps the cache for an hour instead of 5 minutes. Cache writes then cost twice the prompt price instead of 1.25 times, so it only saves money if you often pause 5 to 60 minutes.
+- The cache log line also shows roughly where each cache point sits (in tokens), so a read can be matched to the point it reached. The cost log prices 1-hour cache writes correctly.
+- Anthropic (Native, cached): the reply after an action's result keeps the action list (with actions switched off for that one reply) instead of dropping it, so the action list and system prompt are still read from the cache on that reply and the next one, instead of the whole prompt being written again. Other LLM services work as before.
+- Extensions get the base ids of the NPCs being answered (`speaking_ids`) before each reply, so they know who speaks even before the game has written its speaker file.
+- New extension hook `server_actions`: an extension can hand the game an action for a reply itself (Mantella Living World's experimental Console uses it). The `memory_text` hook is now told the game time of the update it is built for.
+- Run Setup Backend.cmd again after updating.
+
+### Fixed
+- Mantella no longer freezes (game and web UI stop responding) when a conversation starts before the NPC has joined it, for example right after the conversation restarts. The game now asks for your reply instead, and a reply that fails with an error no longer leaves Mantella stuck either.
+- A helper model call made by an extension while a reply is running (Mantella Living World's Console) no longer waits for that reply to finish, which froze Mantella and its web UI.
+- Lip files are generated even when the game is started from a launcher that sets NoDefaultCurrentDirectoryInExePath.
+
 ## 1.4.0 (2026-11-09)
 
 ### New

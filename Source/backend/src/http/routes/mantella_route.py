@@ -55,6 +55,20 @@ class mantella_route(routeable):
 
         tts: TTSable = create_tts(self._config.tts_service, self._config, game)
 
+        from src.llm import anthropic_native
+        try:
+            anthropic_native.long_cache = bool(self._config.definitions.get_bool_value("anthropic_long_cache"))
+        except Exception as e:  # a config without the setting keeps Anthropic's 5-minute cache
+            anthropic_native.long_cache = False
+            logger.debug(f"Anthropic: 1-Hour Cache setting not read ({e}); using the 5-minute cache")
+        if anthropic_native.long_cache:
+            logger.log(23, "Anthropic (Native): 1-hour cache on (cache writes cost 2x the prompt price instead of 1.25x)")
+        try:
+            anthropic_native.shared_long_cache = bool(self._config.definitions.get_bool_value("anthropic_shared_long_cache"))
+        except Exception as e:  # a config without the setting: the default, on
+            anthropic_native.shared_long_cache = True
+            logger.debug(f"Anthropic: 1-Hour Cache for the Shared Part setting not read ({e}); on by default")
+
         llm_client = LLMClient(self._config)
 
         summary_client: SummaryLLMClient | None = None

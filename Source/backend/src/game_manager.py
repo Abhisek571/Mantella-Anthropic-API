@@ -403,6 +403,7 @@ class GameStateManager:
     def load_character(self, json: dict[str, Any]) -> Character | None:
         try:
             base_id: str = utils.convert_to_skyrim_hex_format(str(json[comm_consts.KEY_ACTOR_BASEID]))
+            hub_base_id: str = base_id[-6:]  # how the Living World Hub names npc/<id>.json: keeps a light plugin's FExxx digits
             ref_id: str = utils.convert_to_skyrim_hex_format(str(json[comm_consts.KEY_ACTOR_REFID]))
 
             # ignore plugin ID at the start of the ref ID as this can vary by load order
@@ -478,7 +479,7 @@ class GameStateManager:
                 else:
                     tts_voice_model = self.__get_player_voice_model(None)
 
-            return Character(base_id,
+            character = Character(base_id,
                             ref_id,
                             character_name,
                             gender,
@@ -499,6 +500,8 @@ class GameStateManager:
                             llm_service=llm_service,
                             llm_model=llm_model,
                             tts_service=tts_service)
+            character.hub_base_id = hub_base_id
+            return character
         except CharacterDoesNotExist:                 
             logger.error('Character not loaded. Restarting...')
             return None 
