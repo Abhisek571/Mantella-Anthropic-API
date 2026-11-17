@@ -637,6 +637,9 @@ function MDI_OpenReservedTextMenu(int sessionGeneration)
                 ClearRepeatingMessage()
                 sendRequestForPlayerInput(result, updateContext=False)
                 return
+            elseif sessionGeneration == _mdiSessionGeneration && _mdiSessionActive
+                ; another line came in while the box was open and took the turn: say so rather than drop the text
+                Debug.Notification("Mantella: Reply not sent, an NPC spoke first. Type it again.")
             endIf
         endIf
     endIf

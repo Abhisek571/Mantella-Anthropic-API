@@ -17,6 +17,7 @@ Every change to Mantella - Direct AI Connect. The Nexus page lists only the main
 - Run Setup Backend.cmd again after updating.
 
 ### Fixed
+- Group and radiant talks raise every reply limit you set (max_tokens, max_completion_tokens, or max_tokens in extra_body) to at least 250, so a low limit under another name no longer wins; a whole-number decimal limit such as 500.0 counts. Dual Input: text typed while an NPC took the turn is no longer dropped silently; a notification says it was not sent.
 - Group and radiant talks keep your own reply limit when it is set as max_completion_tokens (raised to 250 at least); before, a second limit of 250 replaced it and thinking models could reply with nothing.
 - XTTS: a voice request that hangs now gives up after a time limit instead of freezing the talk and its end; an XTTS error is logged, and an NPC with no voice model no longer stops the line with an error.
 - Setup tells Vortex users to Deploy, and INSTALL.txt has Vortex steps. Setup run with no keyboard input stops with its own message.
