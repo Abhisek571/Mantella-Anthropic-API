@@ -478,14 +478,28 @@ class ClientBase(AIClient):
                         while True:
                             attempt = reliability.Attempt()
                             stream = link._stream_attempt(*prepared, attempt)
+                            # the model's own planning text is never spoken (live test 18); one sentence is held back
+                            # only on a reply that may call actions
+                            guard = reliability.PlanningGuard(str(getattr(extensions, 'speaking', '') or '').split(','),
+                                                              lookahead=bool(offered_tools) and not no_tool_use)
                             try:
                                 try:
                                     async for item in stream:
+                                        if item and item[0] == 'content':
+                                            for text in guard.feed(item[1]):
+                                                yield ('content', text)
+                                            continue
+                                        for text in guard.flush():  # before the action calls, in the reply's order
+                                            yield ('content', text)
                                         yield item
                                 finally:
                                     await stream.aclose()
+                                for text in guard.flush():
+                                    yield ('content', text)
                             except Exception as e:
                                 if attempt.spoke or (link is self and not (self._reliability['fallback_models'] and reliability.is_outage(e))):
+                                    for text in guard.flush():  # what it said before the failure is kept, as before
+                                        yield ('content', text)
                                     raise
                                 failure = e
                                 logger.warning(f"Fallback: {link.model_name} could not answer and has said nothing yet: {e}")
