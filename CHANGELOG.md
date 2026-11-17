@@ -17,6 +17,9 @@ Every change to Mantella - Direct AI Connect. The Nexus page lists only the main
 - Run Setup Backend.cmd again after updating.
 
 ### Fixed
+- With Mantella's "Conversation summaries" switched off, extensions still save their own memories at the end of a talk (Mantella Living World saves its memories and starts the next talk fresh). Only Mantella's own summary is skipped.
+- An NPC action that waits for its result (for example Inventory) no longer loses its follow-up reply when a game event asks the NPCs to react in between.
+- Setup Backend.cmd builds the OStim flows only from a copy of OStim Expansion that is enabled in the Mod Organizer 2 profile it reads, and the setup output names that profile (the one last selected in Mod Organizer 2).
 - Mantella no longer freezes (game and web UI stop responding) when a conversation starts before the NPC has joined it, for example right after the conversation restarts. The game now asks for your reply instead, and a reply that fails with an error no longer leaves Mantella stuck either.
 - A helper model call made by an extension while a reply is running (Mantella Living World's Console) no longer waits for that reply to finish, which froze Mantella and its web UI.
 - Lip files are generated even when the game is started from a launcher that sets NoDefaultCurrentDirectoryInExePath.

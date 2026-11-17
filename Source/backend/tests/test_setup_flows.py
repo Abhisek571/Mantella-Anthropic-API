@@ -178,5 +178,34 @@ with tempfile.TemporaryDirectory() as tmp:
     code, out = run_setup(setup_mod, tmp, keep_stdin_open=True, wait=60)
     check('asking flowgen, no terminal: no hang, exit code 0', code == 0, (code, out))
 
+# (e) B13: a copy of OStim Expansion that is off in the profile read builds nothing; the next copy that is on is used,
+# and the profile read is named (it is the one last selected in Mod Organizer 2)
+if flowgen:
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp) / 'instance'
+        setup_mod = make_instance(base, ostim_tool=flowgen)
+        off_tool = base / 'mods/An Old OStim Copy' / TOOL  # sorts before "OStim Mod"
+        off_tool.mkdir(parents=True)
+        shutil.copy2(flowgen, off_tool / 'flowgen.py')
+        modlist = base / 'profiles/Default/modlist.txt'
+        modlist.write_text(modlist.read_text(encoding='utf-8') + '-An Old OStim Copy\n', encoding='utf-8')
+        code, out = run_setup(setup_mod, tmp)
+        check('copy off in the profile: skipped, the enabled copy builds the flows',
+              code == 0 and 'is not enabled in profile "Default"' in out and 'Flows built: 1 sets from 1 packs' in out
+              and (base / 'mods' / FLOWS_MOD / 'SKSE/Plugins/OStim/sequences/MAEF_S1.json').is_file(), (code, out[-1200:]))
+        check('the profile read is named as the one last selected in Mod Organizer 2',
+              'Profile: Default (the profile last selected in Mod Organizer 2' in out, out[-1200:])
+        check('copy off in the profile: no warning', 'Warning' not in out, out[-1200:])
+        # only a copy that is off: nothing built, a plain note, the setup still succeeds
+        shutil.rmtree(base / 'mods' / 'OStim Mod')
+        shutil.rmtree(base / 'mods' / FLOWS_MOD)
+        modlist.write_text(''.join(l + '\n' for l in modlist.read_text(encoding='utf-8').splitlines() if 'OStim Mod' not in l), encoding='utf-8')
+        code, out = run_setup(setup_mod, tmp)
+        check('only a copy that is off: no flows, a note naming why, setup succeeds',
+              code == 0 and 'not enabled in the profile named above' in out and not (base / 'mods' / FLOWS_MOD).exists()
+              and 'Warning' not in out, (code, out[-1200:]))
+else:
+    print('SKIP disabled-copy check with the real flowgen.py (OStim Expansion source not found next to this repo)')
+
 print('RESULT: ' + ('ALL PASS' if not FAILS else f'{len(FAILS)} FAILED: {FAILS}'))
 sys.exit(1 if FAILS else 0)

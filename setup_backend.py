@@ -247,22 +247,29 @@ def find_base(root=ROOT):
 
 FLOWS_TOOL = Path('tools/Mantella Living World - OStim Expansion/flowgen.py')
 FLOWS_TIMEOUT = 600  # seconds; a normal build takes well under a minute
+FLOWS_NOT_ENABLED = 3  # flowgen's exit code when the mod it is in is not enabled in the profile it read
+
+
+def find_flowgens(root=ROOT):
+    """Every copy of Mantella Living World - OStim Expansion's flow builder: the one in this mod (All in One) first,
+    then those in sibling mod folders."""
+    root = Path(root)
+    own = [root / FLOWS_TOOL] if (root / FLOWS_TOOL).is_file() else []
+    return own + [p for p in sorted(root.parent.glob('*/' + FLOWS_TOOL.as_posix())) if not own or p.resolve() != own[0].resolve()]
 
 
 def find_flowgen(root=ROOT):
-    """Mantella Living World - OStim Expansion's flow builder: in this mod (All in One) or in a sibling mod folder."""
-    root = Path(root)
-    if (root / FLOWS_TOOL).is_file():
-        return root / FLOWS_TOOL
-    return next(iter(sorted(root.parent.glob('*/' + FLOWS_TOOL.as_posix()))), None)
+    """The first copy of the flow builder (find_flowgens), or None."""
+    return next(iter(find_flowgens(root)), None)
 
 
 def build_flows(root=ROOT, timeout=FLOWS_TIMEOUT):
-    """Builds the OStim flows when OStim Expansion is installed. Says nothing when it is not.
-    Returns True (built), False (failed) or None (not installed). Never stops the setup."""
+    """Builds the OStim flows when OStim Expansion is installed. Says nothing when it is not. A copy whose mod is not
+    enabled in the Mod Organizer 2 profile the flow builder reads (it names that profile) is passed over for the next.
+    Returns True (built), False (failed) or None (not installed or not enabled). Never stops the setup."""
     import subprocess
-    flowgen = find_flowgen(root)
-    if flowgen is None:
+    copies = find_flowgens(root)
+    if not copies:
         return None
     print()
     print('Building OStim flows...', flush=True)
@@ -270,21 +277,27 @@ def build_flows(root=ROOT, timeout=FLOWS_TIMEOUT):
     # a question from the flow builder (where Mod Organizer 2 is) can be answered in this window; with no
     # window to answer in, it gets no input and stops with its own message instead of waiting forever
     stdin = None if sys.stdin is not None and sys.stdin.isatty() else subprocess.DEVNULL
-    problem = None
-    try:
-        result = subprocess.run([sys.executable, str(flowgen), '--auto'], stdin=stdin, timeout=timeout)
-        if result.returncode != 0:
-            problem = 'see the message above'
-    except subprocess.TimeoutExpired:
-        took = f'{timeout // 60} minutes' if timeout >= 60 else f'{timeout} seconds'
-        problem = f'it took longer than {took} and was stopped'
-    except OSError as error:
-        problem = str(error)
-    if problem:
-        print(f'Warning: the OStim flows were not built ({problem}). The backend is built and ready. '
-              f'Run Build Flows.cmd in {flowgen.parent} later.', flush=True)
-        return False
-    return True
+    for flowgen in copies:
+        problem = None
+        try:
+            result = subprocess.run([sys.executable, str(flowgen), '--auto'], stdin=stdin, timeout=timeout)
+            if result.returncode == FLOWS_NOT_ENABLED:
+                continue
+            if result.returncode != 0:
+                problem = 'see the message above'
+        except subprocess.TimeoutExpired:
+            took = f'{timeout // 60} minutes' if timeout >= 60 else f'{timeout} seconds'
+            problem = f'it took longer than {took} and was stopped'
+        except OSError as error:
+            problem = str(error)
+        if problem:
+            print(f'Warning: the OStim flows were not built ({problem}). The backend is built and ready. '
+                  f'Run Build Flows.cmd in {flowgen.parent} later.', flush=True)
+            return False
+        return True
+    print('The OStim flows were not built: OStim Expansion is not enabled in the profile named above. The backend is '
+          'built and ready.', flush=True)
+    return None
 
 
 def main():
