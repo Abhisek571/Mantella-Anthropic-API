@@ -51,6 +51,26 @@ def only_offered(tool_calls: list, tools: list | None) -> list:
     return kept
 
 
+GROUP_MIN_TOKENS = 250
+
+
+def token_limit(request_params: dict | None) -> int:
+    """The reply limit the player set, by either name (max_tokens, or OpenAI's max_completion_tokens), else 250."""
+    for key in ('max_tokens', 'max_completion_tokens'):
+        value = (request_params or {}).get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return GROUP_MIN_TOKENS
+
+
+def group_max_tokens(request_params: dict) -> dict:
+    """Radiant and multi-NPC talks get at least GROUP_MIN_TOKENS, written into the limit the player set (so a higher
+    max_completion_tokens is never replaced by a second, lower max_tokens)."""
+    key = 'max_completion_tokens' if 'max_completion_tokens' in request_params and 'max_tokens' not in request_params else 'max_tokens'
+    request_params[key] = max(token_limit(request_params), GROUP_MIN_TOKENS)
+    return request_params
+
+
 class NoToolUse(list):
     """The actions of a reply that must not call one (the answer after an action's result). Anthropic (Native) still
     sends them, with tool_choice none, so the cached prefix stays the same as on the other replies; every other
@@ -207,7 +227,7 @@ class ClientBase(AIClient):
     @property
     def max_tokens_param(self) -> int:
         """Returns the max_tokens value from request params, or defaults to 250"""
-        return self._request_params.get("max_tokens", 250) if self._request_params else 250
+        return token_limit(self._request_params)
 
 
     @utils.time_it
@@ -596,8 +616,8 @@ class ClientBase(AIClient):
             request_params = self._request_params.copy() # copy of self._request_params to allow temporary override
         else:
             request_params: dict[str, Any] = {}
-        if is_multi_npc: # override max_tokens to be at least 250 in radiant / multi-NPC conversations
-            request_params["max_tokens"] = max(self.max_tokens_param, 250)
+        if is_multi_npc: # at least 250 tokens in radiant / multi-NPC conversations
+            group_max_tokens(request_params)
         if tools:
             request_params["tools"] = tools
 

@@ -17,6 +17,10 @@ Every change to Mantella - Direct AI Connect. The Nexus page lists only the main
 - Run Setup Backend.cmd again after updating.
 
 ### Fixed
+- Group and radiant talks keep your own reply limit when it is set as max_completion_tokens (raised to 250 at least); before, a second limit of 250 replaced it and thinking models could reply with nothing.
+- XTTS: a voice request that hangs now gives up after a time limit instead of freezing the talk and its end; an XTTS error is logged, and an NPC with no voice model no longer stops the line with an error.
+- Setup tells Vortex users to Deploy, and INSTALL.txt has Vortex steps. Setup run with no keyboard input stops with its own message.
+- The source notice lists every changed Mantella module.
 - With Mantella's "Conversation summaries" switched off, extensions still save their own memories at the end of a talk (Mantella Living World saves its memories and starts the next talk fresh). Only Mantella's own summary is skipped.
 - An NPC action that waits for its result (for example Inventory) no longer loses its follow-up reply when a game event asks the NPCs to react in between.
 - Setup Backend.cmd builds the OStim flows only from a copy of OStim Expansion that is enabled in the Mod Organizer 2 profile it reads, and the setup output names that profile (the one last selected in Mod Organizer 2).
