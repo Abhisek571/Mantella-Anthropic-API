@@ -158,7 +158,22 @@ class LLMDefinitions:
         description = """WARNING: This is an experimental feature and may increase rather than decrease billing.
                         Enable Claude prompt caching when using Anthropic Claude models via OpenRouter."""
         return ConfigValueBool("claude_prompt_caching_enabled", "Claude Prompt Caching", description, False, tags=[ConfigValueTag.advanced])
-    
+
+    @staticmethod
+    def get_anthropic_long_cache_config_value() -> ConfigValue:
+        description = """Anthropic (Native, cached) only. Keeps the cached part of the prompt for 1 hour instead of 5 minutes.
+                        With it on, a talk you come back to after a pause of 5 to 60 minutes, or the next NPC you talk to within the hour, still reads the cache at the cheap rate.
+                        The cost: writing to the cache costs twice the normal prompt price instead of 1.25 times, on every write.
+                        It saves money only if you often pause 5 to 60 minutes in the middle of talks or between them. If you talk steadily, or leave the game for hours, it costs more. Off by default."""
+        return ConfigValueBool("anthropic_long_cache", "Anthropic: 1-Hour Cache", description, False, tags=[ConfigValueTag.advanced])
+
+    @staticmethod
+    def get_anthropic_shared_long_cache_config_value() -> ConfigValue:
+        description = """Anthropic (Native, cached) only. Keeps only the part every NPC shares (the action list and the shared rules) cached for 1 hour; each NPC's own part stays at 5 minutes.
+                        A talk started after a pause of 5 to 60 minutes then still reads that shared part at the cheap rate. That part is written at twice the prompt price about once an hour, instead of 1.25 times after every pause.
+                        Has no effect while "Anthropic: 1-Hour Cache" is on (everything is kept 1 hour then). On by default."""
+        return ConfigValueBool("anthropic_shared_long_cache", "Anthropic: 1-Hour Cache for the Shared Part", description, True, tags=[ConfigValueTag.advanced])
+
     @staticmethod
     def get_allow_per_character_llm_overrides_config_value() -> ConfigValue:
         description = """Allow individual characters to use different LLM models/providers for one-on-one conversations.

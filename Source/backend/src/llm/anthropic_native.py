@@ -4,9 +4,11 @@ Mantella builds OpenAI-style messages. This module converts them to the Messages
 markers and streams the reply back in the shapes ClientBase already yields: ("content", text) and
 ("tool_calls", [OpenAI-style tool calls]).
 
-Cache layout: one breakpoint at the end of the system prompt (tools + system: bio, memories, actions), one on
-the newest message before its screenshot, and one on the last NPC reply. The screenshot and the names note
-come after the last breakpoint, so they never break the cached prefix.
+Cache layout (Anthropic allows 4 cache points per request), in order of value: the newest message before its
+screenshot; the system prompt's cache points (one at its end, or up to 3 named by an extension: the part shared by
+every NPC, the NPC's fixed text, the end); the end of the action list, which every NPC with the same actions shares;
+the last NPC reply. A point whose prefix is too short to be cached by the model only fills a spare slot. The
+screenshot, the names note and the scene come after the last point, so they never break the cached prefix.
 """
 from typing import Any, AsyncGenerator, Callable
 import json
@@ -264,27 +266,89 @@ def convert_messages(openai_messages: list[dict], thinking_by_tool_call: dict[st
 
 
 CACHEABLE_BLOCKS = ('text', 'tool_use', 'tool_result')
+MAX_CACHE_POINTS = 4  # Anthropic's limit per request
+# Shortest prefix (tokens) each model caches; a cache point on a shorter one is accepted but caches nothing.
+# Longest matching model-id prefix wins; other models: 1024.
+CACHE_MINIMUM = {
+    'claude-opus-5': 512, 'claude-fable': 512, 'claude-mythos': 512, 'claude-sonnet-5-5': 512, 'claude-haiku-5-5': 512,
+    'claude-opus-4-8': 1024, 'claude-sonnet-5': 1024, 'claude-sonnet-4': 1024,
+    'claude-opus-4-7': 2048, 'claude-opus-4-6': 4096, 'claude-opus-4-5': 4096, 'claude-haiku-4-5': 4096,
+}
+# Set from the "Anthropic: 1-hour cache" setting (mantella_route); False = Anthropic's default 5 minutes
+long_cache = False
+# Set from the "Anthropic: 1-Hour Cache for the Shared Part" setting (mantella_route): the action list and the first of
+# several system points (the part every NPC shares) keep 1 hour, the rest 5 minutes. Anthropic requires every 1-hour
+# point to come before any 5-minute point; these two are the first points in the prompt, so the order always holds.
+shared_long_cache = True
 
 
-def mark_history(messages: list[dict]):
-    """Cache points on the conversation. Mantella sends the screenshot only with the newest message, so the
-    point goes on the last block before it; the names note is added after this. A second point on the last
-    NPC reply keeps the older history cached even if the newest message reads differently next time."""
-    def mark(blocks: list[dict]) -> bool:
-        for block in reversed(blocks):
-            if block['type'] in CACHEABLE_BLOCKS:
-                block['cache_control'] = {'type': 'ephemeral'}
-                return True
-        return False
+def cache_minimum(model: str) -> int:
+    matches = [prefix for prefix in CACHE_MINIMUM if (model or '').startswith(prefix)]
+    return CACHE_MINIMUM[max(matches, key=len)] if matches else 1024
 
+
+def _last_cacheable(blocks: list[dict]) -> dict | None:
+    return next((block for block in reversed(blocks) if block['type'] in CACHEABLE_BLOCKS), None)
+
+
+def history_points(messages: list[dict]) -> tuple[dict | None, dict | None]:
+    """(newest, last NPC reply) blocks for the conversation's cache points. Mantella sends the screenshot only with
+    the newest message, so that point goes on the last block before it; the names note is added after this. The
+    last NPC reply keeps the older history cached even if the newest message reads differently next time."""
     if not messages:
-        return
+        return None, None
     newest = messages[-1]['content']
     images = [i for i, block in enumerate(newest) if block['type'] == 'image']
-    mark(newest[:images[0]] if images else newest)
-    for message in reversed(messages[:-1]):
-        if message['role'] == 'assistant' and mark(message['content']):
-            return
+    reply = next((block for message in reversed(messages[:-1]) if message['role'] == 'assistant'
+                  for block in [_last_cacheable(message['content'])] if block), None)
+    return _last_cacheable(newest[:images[0]] if images else newest), reply
+
+
+def place_cache_points(system: list[dict], tools: list[dict] | None, messages: list[dict], model: str,
+                       system_marks: list[int]) -> None:
+    """Puts up to 4 cache points, most useful first: newest message, the system points (system_marks, indexes in
+    order), the end of the action list, the last NPC reply. A system or action point whose prefix is clearly below
+    the model's minimum goes last, so it only takes a slot nothing else needs."""
+    control = {'type': 'ephemeral', 'ttl': '1h'} if long_cache else {'type': 'ephemeral'}
+    minimum = cache_minimum(model)
+    # tokens are counted high (3 characters each) so that a point is only demoted when it is surely too short
+    chars = len(json.dumps(tools, ensure_ascii=False)) if tools else 0
+    long_enough = lambda n: n // 3 >= minimum
+    tool_point = [(tools[-1], long_enough(chars))] if tools else []
+    system_points = []
+    for index, block in enumerate(system):
+        chars += len(block['text'])
+        if index in system_marks:
+            system_points.append((block, long_enough(chars)))
+    newest, reply = history_points(messages)
+    ordered = ([newest] if newest else []) + [b for b, ok in system_points if ok] + [b for b, ok in tool_point if ok] \
+        + ([reply] if reply else []) + [b for b, ok in system_points + tool_point if not ok]
+    # the shared part: the action list and, when the system prompt has several points, its first one (one point alone
+    # covers this NPC's own text too, so it stays at 5 minutes)
+    shared = [b for b, _ in tool_point] + ([system_points[0][0]] if len(system_points) > 1 else [])
+    for block in ordered[:MAX_CACHE_POINTS]:
+        long = long_cache or (shared_long_cache and any(block is s for s in shared))
+        block['cache_control'] = {'type': 'ephemeral', 'ttl': '1h'} if long else dict(control)
+
+
+def move_scene(system: list[dict]) -> str:
+    """Mantella's '# Current Scene' section (place, time of day, weather) changes during a talk and sat inside the
+    cached system prompt, so the whole prompt was written to the cache again whenever the hour turned. Takes it out
+    of the system text and returns it for the newest message ('' when the prompt has no such section)."""
+    if len(system) != 1:
+        return ''
+    text = system[0]['text']
+    start = text.find('# Current Scene\n')
+    if start < 0 or (start > 0 and text[start - 1] != '\n') or text.find('# Current Scene\n', start + 1) >= 0:
+        return ''
+    end = text.find('\n# ', start + 1)
+    end = len(text) if end < 0 else end + 1
+    scene = text[start + len('# Current Scene\n'):end].strip()
+    if not scene:
+        return ''
+    before, after = text[:start].rstrip('\n'), text[end:]
+    system[0]['text'] = before + '\n\n' + after if before and after else before or after
+    return f"Current scene: {scene}"
 
 
 def ordered_parts(parts: dict) -> tuple[list[tuple[str, str]], set[str]]:
@@ -340,34 +404,36 @@ def join_system_parts(system_parts: Callable[[dict[str, str]], dict[str, str]], 
 def build_request(model: str, openai_messages: list[dict], request_params: dict[str, Any] | None,
                   tools: list[dict] | None, thinking_by_tool_call: dict[str, Any], cache: bool,
                   extra_texts: list[str] | None = None,
-                  system_parts: Callable[[dict[str, str]], dict[str, str]] | None = None) -> dict[str, Any]:
+                  system_parts: Callable[[dict[str, str]], dict[str, str]] | None = None,
+                  no_tool_use: bool = False) -> dict[str, Any]:
     """Keyword arguments for client.messages.create(). extra_texts go into the newest message after the cache
-    point; system_parts (from an extension) splits the system prompt and places its cache point."""
+    point; system_parts (from an extension) splits the system prompt and names its cache points. no_tool_use keeps
+    the tools but sets tool_choice none: dropping them would change the cached prefix (tools come first), so this
+    request and the next one would both miss the cache."""
     fields, ignored = split_params(request_params, model)
     if ignored:
         logger.debug(f"Anthropic (Native): ignoring parameters the Messages API does not take: {', '.join(ignored)}")
     system, messages = convert_messages(openai_messages, thinking_by_tool_call)
+    scene = ''
     if system_parts:
         system = split_system(system, system_parts)
-    if cache and system:
-        marked = [block for block in system if block.pop('marker', False)] or system[-1:]
-        for block in marked[-2:]:  # at most 2 here: the history takes the other 2 of Anthropic's 4
-            block['cache_control'] = {'type': 'ephemeral'}
-    else:
-        for block in system:
-            block.pop('marker', None)
+    elif cache and messages and messages[-1]['role'] == 'user':
+        scene = move_scene(system)  # an extension's system_parts decides this itself
+    system_marks = [i for i, block in enumerate(system) if block.pop('marker', False)] or ([len(system) - 1] if system else [])
+    tools, names_note = split_entity_lists(tools)
+    converted_tools = convert_tools(tools)
     if cache:
-        mark_history(messages)
+        place_cache_points(system, converted_tools, messages, model, system_marks)
 
     request: dict[str, Any] = {'model': model, 'messages': messages, 'max_tokens': fields.pop('max_tokens')}
     if system:
         request['system'] = system
-    tools, names_note = split_entity_lists(tools)
-    converted_tools = convert_tools(tools)
     if converted_tools:
         request['tools'] = converted_tools
+        if no_tool_use:
+            request['tool_choice'] = {'type': 'none'}
     if messages and messages[-1]['role'] == 'user':
-        for text in ([names_note] if names_note else []) + [t for t in (extra_texts or []) if t]:
+        for text in [t for t in (scene, names_note) if t] + [t for t in (extra_texts or []) if t]:
             messages[-1]['content'].append({'type': 'text', 'text': text})
     for key in ('stop_sequences', 'metadata', 'service_tier'):
         if key in fields:
@@ -404,7 +470,8 @@ def reply_cost(model: str, usage: dict) -> float | None:
     if not matches:
         return None
     new, write, read, out = PRICES[max(matches, key=len)]
-    return (usage.get('uncached', 0) * new + usage.get('cache_write', 0) * write
+    long_write = usage.get('cache_write_1h', 0)  # the 1-hour cache is written at twice the input price
+    return (usage.get('uncached', 0) * new + (usage.get('cache_write', 0) - long_write) * write + long_write * 2 * new
             + usage.get('cache_read', 0) * read + usage.get('output', 0) * out) / 1e6
 
 
@@ -415,14 +482,40 @@ def _field(value: Any, name: str, default: Any = None) -> Any:
     return getattr(value, name, default)
 
 
-def log_usage(usage: Any, prefix: str = 'Anthropic (Native)') -> dict | None:
+def cache_points(request: dict[str, Any]) -> list[int]:
+    """Rough token position (4 characters a token) of each cache point, in the order the API reads the prompt
+    (actions, system, messages), for the usage log: a read of about one of these numbers shows how far it reached."""
+    def size(block: dict) -> int:
+        if 'input_schema' in block:  # an action
+            return len(json.dumps({k: v for k, v in block.items() if k != 'cache_control'}, ensure_ascii=False))
+        if block.get('type') == 'tool_use':
+            return len(block.get('name', '')) + len(json.dumps(block.get('input'), ensure_ascii=False))
+        value = block.get('text') if block.get('type') == 'text' else block.get('content')
+        return len(value) if isinstance(value, str) else 0  # thinking and images are left out
+
+    points, chars = [], 0
+    blocks = list(request.get('tools') or []) + list(request.get('system') or []) + \
+        [block for message in request.get('messages') or [] for block in message['content']]
+    for block in blocks:
+        chars += size(block)
+        if 'cache_control' in block:
+            points.append(chars // 4)
+    return points
+
+
+def log_usage(usage: Any, prefix: str = 'Anthropic (Native)', points: list[int] | None = None) -> dict | None:
     if usage is None:
         return None
     read = _field(usage, 'cache_read_input_tokens', 0) or 0
     written = _field(usage, 'cache_creation_input_tokens', 0) or 0
     uncached = _field(usage, 'input_tokens', 0) or 0
-    logger.log(23, f"{prefix}: prompt tokens cached (read) {read}, written to cache {written}, uncached {uncached}")
-    return {'cache_read': read, 'cache_write': written, 'uncached': uncached}
+    long_written = _field(_field(usage, 'cache_creation'), 'ephemeral_1h_input_tokens', 0) or 0
+    where = f" (cache points at about {', '.join(str(p) for p in points)} tokens)" if points else ''
+    logger.log(23, f"{prefix}: prompt tokens cached (read) {read}, written to cache {written}, uncached {uncached}{where}")
+    result = {'cache_read': read, 'cache_write': written, 'uncached': uncached}
+    if long_written:
+        result['cache_write_1h'] = long_written
+    return result
 
 
 class StreamState:
@@ -437,13 +530,14 @@ class StreamState:
         self.got_text = False
         self.fell_back_to: str | None = None
         self.usage: dict | None = None
+        self.points: list[int] = []  # the request's cache points, for the usage log
 
     def handle(self, event: Any) -> str | None:
         """Processes one stream event. Returns text to speak, if any."""
         kind = _field(event, 'type')
         if kind == 'message_start':
             message = _field(event, 'message')
-            self.usage = log_usage(_field(message, 'usage'))
+            self.usage = log_usage(_field(message, 'usage'), points=self.points)
         elif kind == 'content_block_start':
             block = _field(event, 'content_block')
             block_type = _field(block, 'type')
@@ -496,6 +590,7 @@ async def stream_reply(client: Any, request: dict[str, Any], thinking_by_tool_ca
                        state: StreamState, stall_seconds: float = 0) -> AsyncGenerator[str, None]:
     """Streams one reply, yielding text. Tool calls and the stop reason are left in `state`. Raises TimeoutError when
     no event of any kind arrives for stall_seconds (0 = no limit)."""
+    state.points = cache_points(request)
     events = reliability.stall_limited(client.messages.create(stream=True, **request), stall_seconds)
     try:
         async for event in events:

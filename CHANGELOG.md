@@ -2,6 +2,36 @@
 
 Every change to Mantella - Direct AI Connect. The Nexus page lists only the main changes for each version.
 
+## 1.5.0 (2026-11-18)
+
+### New
+- Anthropic (Native, cached): up to 4 cache points placed by value: the newest message, the system prompt's own points (with Mantella Living World: the part every NPC shares, the NPC's fixed text, the end), the end of the action list, the last NPC reply. The action list and shared rules are read from the cache when you start talking to another NPC with the same actions within 5 minutes; before, the first reply of every talk wrote the whole prompt to the cache again.
+- Without extensions, Mantella's "Current Scene" section (place, time, weather) moves from the system prompt to the newest message, so the cached prompt no longer has to be written again when the in-game hour turns.
+- A cache point on a part too short for the model to cache only takes a slot nothing else needs.
+- New setting "Anthropic: 1-Hour Cache" (LLM tab, advanced, off by default): keeps the cache for an hour instead of 5 minutes. Cache writes then cost twice the prompt price instead of 1.25 times, so it only saves money if you often pause 5 to 60 minutes.
+- The cache log line also shows roughly where each cache point sits (in tokens), so a read can be matched to the point it reached. The cost log prices 1-hour cache writes correctly.
+- Anthropic (Native, cached): the reply after an action's result keeps the action list (with actions switched off for that one reply) instead of dropping it, so the action list and system prompt are still read from the cache on that reply and the next one, instead of the whole prompt being written again. Other LLM services work as before.
+- Extensions get the base ids of the NPCs being answered (`speaking_ids`) before each reply, so they know who speaks even before the game has written its speaker file.
+- New extension hook `server_actions`: an extension can hand the game an action for a reply itself (Mantella Living World's experimental Console uses it). The `memory_text` hook is now told the game time of the update it is built for.
+- Setup Backend.cmd also builds the OStim flows when Mantella Living World - OStim Expansion is installed (as its own mod or in the All in One), so Build Flows.cmd is only needed after changing animation packs. If the flows cannot be built, setup says so and the backend stays ready.
+- Run Setup Backend.cmd again after updating.
+
+### Fixed
+- The NPC no longer says the model's own planning aloud ("I'll have her react and decide.", "I'll rate her appetite silently and reply in character.", remarks on the attached image). With thinking off before its first action call, a model sometimes writes its deliberation as text; every reply now goes to speech sentence by sentence and such sentences are left out (logged). On a reply that may call actions one sentence is held back, which costs the time one sentence takes to stream.
+- Group and radiant talks raise every reply limit you set (max_tokens, max_completion_tokens, or max_tokens in extra_body) to at least 250, so a low limit under another name no longer wins; a whole-number decimal limit such as 500.0 counts. Dual Input: text typed while an NPC took the turn is no longer dropped silently; a notification says it was not sent.
+- Group and radiant talks keep your own reply limit when it is set as max_completion_tokens (raised to 250 at least); before, a second limit of 250 replaced it and thinking models could reply with nothing.
+- XTTS: a voice request that hangs now gives up after a time limit instead of freezing the talk and its end; an XTTS error is logged, and an NPC with no voice model no longer stops the line with an error.
+- Setup tells Vortex users to Deploy, and INSTALL.txt has Vortex steps. Setup run with no keyboard input stops with its own message.
+- The source notice lists every changed Mantella module.
+- With Mantella's "Conversation summaries" switched off, extensions still save their own memories at the end of a talk (Mantella Living World saves its memories and starts the next talk fresh). Only Mantella's own summary is skipped.
+- An NPC action that waits for its result (for example Inventory) no longer loses its follow-up reply when a game event asks the NPCs to react in between.
+- Setup Backend.cmd builds the OStim flows only from a copy of OStim Expansion that is enabled in the Mod Organizer 2 profile it reads, and the setup output names that profile (the one last selected in Mod Organizer 2).
+- Mantella no longer freezes (game and web UI stop responding) when a conversation starts before the NPC has joined it, for example right after the conversation restarts. The game now asks for your reply instead, and a reply that fails with an error no longer leaves Mantella stuck either.
+- A helper model call made by an extension while a reply is running (Mantella Living World's Console) no longer waits for that reply to finish, which froze Mantella and its web UI.
+- Lip files are generated even when the game is started from a launcher that sets NoDefaultCurrentDirectoryInExePath.
+- A conversation started after loading a save in which the same NPCs were still listed in an earlier talk now sends those NPCs to Mantella. Before, the start request could carry no NPCs at all.
+- Setup Backend.cmd: pointing it at an already patched Mantella.exe, or running it while Mantella.exe is in use, now says what to do and changes nothing. It also finds stock Mantella's Mantella.exe in Vortex's staging folder, and skips a copy it cannot read.
+
 ## 1.4.0 (2026-11-09)
 
 ### New

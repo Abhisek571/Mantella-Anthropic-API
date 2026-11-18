@@ -66,6 +66,11 @@ class Summaries(Remembering):
         self.__language_name: str = language_name
         self.__memory_prompt: str = config.memory_prompt
         self.__resummarize_prompt: str = config.resummarize_prompt
+        self.__game_days: float | None = None
+
+    def note_game_days(self, game_days: float | None) -> None:
+        """The game time of the newest update from the game (None when it sent none), for the memory_text hook."""
+        self.__game_days = game_days
 
     def __read_summary_lines(self, file_path: str, deduplicate: bool = False) -> list[str]:
         """Read a summary file and return non-empty stripped lines.
@@ -111,10 +116,11 @@ class Summaries(Remembering):
             character_memories.append(memory)
 
         text = f"Below is a summary of past events:\n" + "\n\n".join(character_memories) if character_memories else ""
-        return src_extensions.registry().filter('memory_text', text, {'characters': characters, 'world_id': world_id, 'summaries': self})
+        return src_extensions.registry().filter('memory_text', text, {'characters': characters, 'world_id': world_id, 'summaries': self,
+                                                                      'game_days': self.__game_days})
 
     @utils.time_it
-    def save_conversation_state(self, messages: message_thread, npcs_to_summarize: list[Character], npcs_in_conversation: Characters, world_id: str, is_reload=False, pending_shares: list[tuple[str, str, str]] | None = None, end_timestamp: float | None = None, is_radiant: bool = False, departed: bool = False):
+    def save_conversation_state(self, messages: message_thread, npcs_to_summarize: list[Character], npcs_in_conversation: Characters, world_id: str, is_reload=False, pending_shares: list[tuple[str, str, str]] | None = None, end_timestamp: float | None = None, is_radiant: bool = False, departed: bool = False, stock_summary: bool = True):
         """Save conversation summaries for the requested NPCs, with per-NPC thread tracking.
 
         NPCs only get summaries of the messages they actually heard (based on participation log).
@@ -131,6 +137,8 @@ class Summaries(Remembering):
             is_radiant: Whether this is a Radiant conversation (bypass min message threshold)
             departed: The NPCs left a talk that goes on; this is their last save of it (an extension sees it as a
                 finished talk for them, not a reload)
+            stock_summary: False when Mantella's "Conversation summaries" setting is off: the summarize extensions
+                still run (they keep their own memory), the stock summary does not
         """
         extensions = src_extensions.registry()
         if extensions.has('summarize') and any(extensions.collect('summarize', {
@@ -138,6 +146,8 @@ class Summaries(Remembering):
                 'world_id': world_id, 'is_reload': is_reload and not departed, 'departed': departed, 'pending_shares': pending_shares, 'end_timestamp': end_timestamp,
                 'is_radiant': is_radiant, 'client': self.__client, 'summaries': self})):
             return  # an extension saved this conversation's memory itself
+        if not stock_summary:
+            return
         npc_message_threads: Dict[str, CharacterSummaryParameters] = self.get_threads_for_summarization(messages, npcs_in_conversation)
 
         # Filter to only the NPCs the caller wants summarized

@@ -26,6 +26,18 @@ logger = utils.get_logger()
 EVENT_TURN_MARKER = "mantella_event_turn"
 
 
+def awaits_action_result(was_awaiting: bool, reply: Any) -> bool:
+    """Whether the conversation should still wait for an action result after an event-turn request whose events did
+    not resume it: only when it already waited before that request (a real action's result is still to come) or this
+    reply sends an action that needs one. Clearing it in every case lost the follow-up of a pending action."""
+    if was_awaiting:
+        return True
+    if not isinstance(reply, dict) or reply.get(comm_consts.KEY_REPLYTYPE) != comm_consts.KEY_REPLYTYPE_NPCACTION:
+        return False
+    action = reply.get(comm_consts.KEY_REPLYTYPE_NPCACTION)
+    return isinstance(action, dict) and bool(action.get(comm_consts.KEY_ACTOR_ACTIONS_REQUIRE_RESPONSE))
+
+
 class mantella_route(routeable):
     """Main route for Mantella conversations
 
@@ -54,6 +66,20 @@ class mantella_route(routeable):
             game = Skyrim(self._config)
 
         tts: TTSable = create_tts(self._config.tts_service, self._config, game)
+
+        from src.llm import anthropic_native
+        try:
+            anthropic_native.long_cache = bool(self._config.definitions.get_bool_value("anthropic_long_cache"))
+        except Exception as e:  # a config without the setting keeps Anthropic's 5-minute cache
+            anthropic_native.long_cache = False
+            logger.debug(f"Anthropic: 1-Hour Cache setting not read ({e}); using the 5-minute cache")
+        if anthropic_native.long_cache:
+            logger.log(23, "Anthropic (Native): 1-hour cache on (cache writes cost 2x the prompt price instead of 1.25x)")
+        try:
+            anthropic_native.shared_long_cache = bool(self._config.definitions.get_bool_value("anthropic_shared_long_cache"))
+        except Exception as e:  # a config without the setting: the default, on
+            anthropic_native.shared_long_cache = True
+            logger.debug(f"Anthropic: 1-Hour Cache for the Shared Part setting not read ({e}); on by default")
 
         llm_client = LLMClient(self._config)
 
@@ -91,11 +117,12 @@ class mantella_route(routeable):
                     case comm_consts.KEY_REQUESTTYPE_STARTCONVERSATION:
                         reply = self.__game.start_conversation(received_json)
                     case comm_consts.KEY_REQUESTTYPE_CONTINUECONVERSATION:
-                        talk = self.__prepare_event_turn(received_json)
+                        talk, was_awaiting = self.__prepare_event_turn(received_json)
                         reply = self.__game.continue_conversation(received_json)
-                        if talk is not None:
-                            # No events arrived: don't leave the flag for a later request to trip over.
-                            talk._Conversation__awaiting_action_result = False
+                        if talk is not None and talk._Conversation__awaiting_action_result:
+                            # No events arrived: don't leave the flag for a later request to trip over, unless a
+                            # real action result is still awaited.
+                            talk._Conversation__awaiting_action_result = awaits_action_result(was_awaiting, reply)
                     case comm_consts.KEY_REQUESTTYPE_PLAYERINPUT:
                         reply = self.__game.player_input(received_json)
                     case comm_consts.KEY_REQUESTTYPE_ENDCONVERSATION:
@@ -114,16 +141,18 @@ class mantella_route(routeable):
 
         Reuses Mantella's path for actions that require a response: the
         conversation adds a message holding only the in-game events and the
-        NPCs answer it. Returns the conversation when the turn was requested,
-        else None. Nothing changes when the marker is absent.
+        NPCs answer it. Returns (the conversation, whether it already waited
+        for an action result) when the turn was requested, else (None, False).
+        Nothing changes when the marker is absent.
         """
         extra_actions = received_json.get(comm_consts.KEY_REQUEST_EXTRA_ACTIONS) or []
         if EVENT_TURN_MARKER not in extra_actions:
-            return None
+            return None, False
         talk = getattr(self.__game, '_GameStateManager__talk', None)
         if talk is None or not hasattr(talk, '_Conversation__awaiting_action_result'):
             logger.warning('Event turn requested, but no conversation is running.')
-            return None
+            return None, False
+        was_awaiting = bool(talk._Conversation__awaiting_action_result)
         talk._Conversation__awaiting_action_result = True
         logger.log(23, 'Event turn requested by the game')
-        return talk
+        return talk, was_awaiting

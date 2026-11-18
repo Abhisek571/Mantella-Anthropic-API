@@ -20,6 +20,26 @@ for name in ('src.conversation.conversation', 'src.game_manager', 'src.http.comm
     check(f'{name} replaced', name in S.MODULES and (BACKEND / S.MODULES[name]).is_file() and (ROOT / 'Source/upstream' / S.MODULES[name]).is_file())
 check('dual_input module added', 'src.dual_input' in S.NEW_MODULES and (BACKEND / S.NEW_MODULES['src.dual_input']).is_file())
 
+# test_long_cache_setting: "Anthropic: 1-Hour Cache" is a real setting in the LLM tab, off by default, read by the route
+defs = 'src.config.mantella_config_value_definitions_new'
+check('settings list replaced', defs in S.MODULES and (ROOT / 'Source/upstream' / S.MODULES[defs]).is_file())
+registered = (BACKEND / S.MODULES[defs]).read_text(encoding='utf-8')
+stock = (ROOT / 'Source/upstream' / S.MODULES[defs]).read_text(encoding='utf-8')
+check('1-hour cache added to the LLM tab, after Claude Prompt Caching', 'get_claude_prompt_caching_config_value())\n        llm_category.add_config_value(LLMDefinitions.get_anthropic_long_cache_config_value())' in registered)
+check('...then the 1-hour cache for the shared part', 'get_anthropic_long_cache_config_value())\n        llm_category.add_config_value(LLMDefinitions.get_anthropic_shared_long_cache_config_value())' in registered)
+check('settings list: nothing else changed', registered.replace('        llm_category.add_config_value(LLMDefinitions.get_anthropic_long_cache_config_value())\n', '')
+      .replace('        llm_category.add_config_value(LLMDefinitions.get_anthropic_shared_long_cache_config_value())\n', '') == stock)
+llm_defs = ast.parse((BACKEND / 'src/config/definitions/llm_definitions.py').read_text(encoding='utf-8'))
+getter = next(f for f in ast.walk(llm_defs) if isinstance(f, ast.FunctionDef) and f.name == 'get_anthropic_long_cache_config_value')
+call = next(n for n in ast.walk(getter) if isinstance(n, ast.Call) and getattr(n.func, 'id', '') == 'ConfigValueBool')
+check('1-hour cache: bool, key anthropic_long_cache, off by default', call.args[0].value == 'anthropic_long_cache' and call.args[3].value is False, ast.dump(call)[:200])
+check('route reads the setting', 'get_bool_value("anthropic_long_cache")' in (BACKEND / 'src/http/routes/mantella_route.py').read_text(encoding='utf-8'))
+getter = next(f for f in ast.walk(llm_defs) if isinstance(f, ast.FunctionDef) and f.name == 'get_anthropic_shared_long_cache_config_value')
+call = next(n for n in ast.walk(getter) if isinstance(n, ast.Call) and getattr(n.func, 'id', '') == 'ConfigValueBool')
+check('shared-part 1-hour cache: bool, key anthropic_shared_long_cache, on by default',
+      call.args[0].value == 'anthropic_shared_long_cache' and call.args[3].value is True, ast.dump(call)[:200])
+check('route reads that setting too', 'get_bool_value("anthropic_shared_long_cache")' in (BACKEND / 'src/http/routes/mantella_route.py').read_text(encoding='utf-8'))
+
 # test_only_stock_base: the patch builds from stock Mantella 0.14 only (Dual Input is now inside it)
 contract = json.loads((BACKEND / 'build-contract.json').read_text(encoding='utf-8'))
 check('only the stock base', [b['name'] for b in contract['bases'].values()] == ['Mantella 0.14'], [b['name'] for b in contract['bases'].values()])
@@ -106,5 +126,78 @@ check('model list shows the cache price', 'input_cache_read' in cb and 'Cache re
 ext_source = (BACKEND / 'src/extensions.py').read_text(encoding='utf-8')
 check("'conversation_limit' is a known hook", "'conversation_limit'" in ext_source.split('HOOKS =', 1)[1].split('\n', 1)[0])
 
-print('RESULT: ' + ('ALL PASS' if not FAILS else f'{len(FAILS)} FAILED: {FAILS}'))
+# Vortex: setup run from a Vortex staging folder says to Deploy (an MO2 folder keeps the MO2 line); no stdin is no crash
+check('setup knows a Vortex staging folder', S.under_vortex(Path('C:/Users/x/AppData/Roaming/Vortex/skyrimse/mods/Mantella - Direct AI Connect'))
+      and not S.under_vortex(Path('C:/Games/MO2/mods/Mantella - Direct AI Connect')))
+setup_src = (ROOT / 'setup_backend.py').read_text(encoding='utf-8')
+check('setup tells a Vortex user to Deploy', 'press Deploy' in setup_src and 'INSTALL WITH VORTEX' in (ROOT / 'INSTALL.txt').read_text(encoding='utf-8'))
+check('setup with no keyboard input stops with its own message', 'except EOFError' in setup_src)
+notice = ' '.join((ROOT / 'SOURCE-AND-LICENSES.txt').read_text(encoding='utf-8').split())
+check('the source notice names every changed module', all(rel in notice for rel in S.MODULES.values()),
+      [rel for rel in S.MODULES.values() if rel not in notice])
+
+# A13: a running Mantella.exe gives a clear message (not a raw [WinError 5]); the original exe is also found in
+# Vortex's staging folder; an already patched exe given as the base is named as such.
+import hashlib, os
+with tempfile.TemporaryDirectory() as tmp:
+    out = Path(tmp) / 'mod' / 'Mantella.exe'
+    real_replace = Path.replace
+    def busy(self, target):
+        raise PermissionError(13, 'Access is denied', str(target), 5)
+    Path.replace = busy
+    try:
+        S.install(b'MZ new build', out)
+        check('running Mantella.exe: refused with advice', False, 'no error')
+    except ValueError as e:
+        check('running Mantella.exe: says to close Mantella and Skyrim, nothing changed',
+              'in use' in str(e) and 'close Mantella' in str(e) and 'Nothing changed' in str(e), str(e))
+    finally:
+        Path.replace = real_replace
+    check('...and no temporary file is left', not list(out.parent.glob('.mant-*')), list(out.parent.glob('*')))
+    S.install(b'MZ new build', out)
+    check('free to replace: written and checked', out.read_bytes() == b'MZ new build')
+
+with tempfile.TemporaryDirectory() as tmp:
+    tmp = Path(tmp)
+    stock = b'MZ stock mantella 0.14 (test)'
+    digest = hashlib.sha256(stock).hexdigest()
+    contract = tmp / 'contract.json'
+    contract.write_text(json.dumps({'bases': {digest: {'name': 'Mantella 0.14', 'patched_sha256': 'x'}}}), encoding='utf-8')
+    vortex = tmp / 'appdata' / 'Vortex' / 'skyrimse' / 'mods' / 'Mantella-1234' / S.EXE
+    vortex.parent.mkdir(parents=True)
+    vortex.write_bytes(stock)
+    dac = tmp / 'elsewhere' / 'Direct AI Connect'
+    dac.mkdir(parents=True)
+    old_contract, old_appdata = S.CONTRACT, os.environ.get('APPDATA')
+    S.CONTRACT, os.environ['APPDATA'] = contract, str(tmp / 'appdata')
+    try:
+        check("no sibling copy: the original exe is found in Vortex's staging folder", S.find_base(dac) == vortex, S.find_base(dac))
+        sibling = tmp / 'mods' / 'Mantella' / S.EXE
+        sibling.parent.mkdir(parents=True)
+        sibling.write_bytes(stock)
+        (tmp / 'mods' / 'DAC').mkdir()
+        check('a sibling mod folder (MO2) comes first', S.find_base(tmp / 'mods' / 'DAC') == sibling, S.find_base(tmp / 'mods' / 'DAC'))
+    finally:
+        S.CONTRACT = old_contract
+        if old_appdata is None:
+            os.environ.pop('APPDATA', None)
+        else:
+            os.environ['APPDATA'] = old_appdata
+
+with tempfile.TemporaryDirectory() as tmp:
+    tmp = Path(tmp)
+    patched = b'MZ an exe this setup built (test)'
+    (tmp / 'Source/backend').mkdir(parents=True)
+    (tmp / 'Source/backend/build-contract.json').write_text(json.dumps({'bases': {'f' * 64: {
+        'name': 'Mantella 0.14', 'patched_sha256': hashlib.sha256(patched).hexdigest()}}}), encoding='utf-8')
+    (tmp / 'Mantella.exe').write_bytes(patched)
+    try:
+        S.build(tmp / 'Mantella.exe', tmp / 'out' / 'Mantella.exe', root=tmp)
+        check('an already patched exe as the base: refused', False, 'no error')
+    except ValueError as e:
+        check('an already patched exe as the base: named as a Direct AI Connect build, not "Unsupported"',
+              'already a Direct AI Connect build' in str(e) and 'Unsupported' not in str(e), str(e))
+    check('...nothing written', not (tmp / 'out').exists())
+
+print('RESULT:' + ('ALL PASS' if not FAILS else f'{len(FAILS)} FAILED: {FAILS}'))
 sys.exit(1 if FAILS else 0)

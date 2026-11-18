@@ -3,5 +3,6 @@ secret_keys.json
 __pycache__/
 SKSE/
 release/
+build-test/
 nexus_page.txt
 description_bbcode.txt

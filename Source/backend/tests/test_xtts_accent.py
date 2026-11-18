@@ -29,7 +29,15 @@ stub('src.config'); stub('src.config.config_loader', ConfigLoader=object)
 stub('src.config.definitions'); stub('src.config.definitions.game_definitions', GameEnum=GameEnum)
 stub('src.tts'); stub('src.tts.ttsable', TTSable=TTSable)
 stub('src.tts.synthesization_options', SynthesizationOptions=object)
-stub('requests'); stub('soundfile'); stub('numpy')
+class RequestException(Exception): pass
+posts = []
+def fake_post(url, json=None, timeout=None):
+    posts.append(timeout)
+    if fake_post.mode == 'raise':
+        raise RequestException('timed out')
+    return types.SimpleNamespace(status_code=fake_post.mode, content=b'', __bool__=lambda self: False)
+fake_post.mode = 200
+stub('requests', post=fake_post, RequestException=RequestException); stub('soundfile'); stub('numpy')
 
 spec = importlib.util.spec_from_file_location('xtts', BACKEND / 'src/tts/xtts.py')
 xtts = importlib.util.module_from_spec(spec); spec.loader.exec_module(xtts)
@@ -68,6 +76,26 @@ src = (BACKEND / 'src/config/definitions/tts_definitions.py').read_text(encoding
 check('setting label warns', '"XTTS Accent (can cause static)"' in src)
 check('setting description starts with WARNING', 'description = """WARNING:' in src)
 check('setting still off by default', '"XTTS Accent (can cause static)", description, False' in src)
+
+# the voice request has a time limit; a timeout, an HTTP error or no voice model fails the line cleanly
+errors = []
+Logger.error = lambda self, msg, *a, **k: errors.append(msg)
+o5 = make('en')
+o5._XTTS__xtts_synthesize_url = 'http://127.0.0.1:8020/tts_to_audio/'
+saved = []
+o5._convert_to_16bit = lambda data, path: saved.append(path)
+o5._last_voice = 'FemaleYoungEager'
+o5._synthesize_line_xtts('Hello.', 'out.wav')
+check('voice request: sent with a time limit, and saved', posts and posts[-1] and saved == ['out.wav'], (posts, saved))
+fake_post.mode = 'raise'
+o5._synthesize_line_xtts('Hello.', 'out2.wav')
+check('voice request: a stalled server fails the line with an error, no raise', saved == ['out.wav'] and errors and 'did not voice' in errors[-1], errors)
+fake_post.mode = 500
+o5._synthesize_line_xtts('Hello.', 'out3.wav')
+check('voice request: an HTTP error is logged', errors and '500' in errors[-1], errors)
+o5._last_voice = None
+o5._synthesize_line_xtts('Hello.', 'out4.wav')
+check('voice request: no voice model found: logged, no raise', errors and 'no voice model' in errors[-1], errors)
 
 print('ALL PASS' if not FAILS else f'{len(FAILS)} FAILED')
 sys.exit(1 if FAILS else 0)

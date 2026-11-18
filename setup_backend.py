@@ -14,6 +14,7 @@ MODULES = {
     'src.utils': 'src/utils.py',
     'src.llm.client_base': 'src/llm/client_base.py',
     'src.config.definitions.llm_definitions': 'src/config/definitions/llm_definitions.py',
+    'src.config.mantella_config_value_definitions_new': 'src/config/mantella_config_value_definitions_new.py',
     'src.config.definitions.vision_definitions': 'src/config/definitions/vision_definitions.py',
     'src.config.definitions.action_definitions': 'src/config/definitions/action_definitions.py',
     'src.http.routes.mantella_route': 'src/http/routes/mantella_route.py',
@@ -134,6 +135,10 @@ def build(base, output, root=ROOT, write_contract=False):
     contract = json.loads((root / 'Source/backend/build-contract.json').read_text(encoding='utf-8'))
     raw = base.read_bytes()
     base_hash = sha256(raw)
+    if not write_contract and any(b.get('patched_sha256') == base_hash for b in contract['bases'].values()):
+        raise ValueError(f'{base} is already a Direct AI Connect build, not the original Mantella.exe. Point to the '
+                         'Mantella.exe inside the Mantella mod itself (with Vortex: in its staging folder, not in Data). '
+                         'Nothing changed.')
     if not write_contract and base_hash not in contract['bases']:
         raise ValueError('Unsupported Mantella executable. Supported: Mantella 0.14 (the Mantella.exe from the Mantella mod itself). Nothing changed.')
 
@@ -179,8 +184,20 @@ def build(base, output, root=ROOT, write_contract=False):
     elif sha256(data) != contract['bases'][base_hash]['patched_sha256']:
         raise ValueError('Built executable does not match the verified release. Nothing changed.')
 
-    output.parent.mkdir(parents=True, exist_ok=True)
+    install(data, output)
+    report['base_name'] = contract['bases'][base_hash]['name']
+    return report
+
+
+IN_USE_HINT = ('Mantella.exe is in use: close Mantella (its window or the game started through it) and Skyrim, then '
+               'run Setup Backend.cmd again. Nothing changed.')
+
+
+def install(data, output):
+    """Writes the built exe through a temporary file next to it and checks it on disk."""
     import os, tempfile
+    output = Path(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix='.mant-', suffix='.tmp', dir=output.parent)
     try:
         with os.fdopen(fd, 'wb') as stream:
@@ -188,26 +205,105 @@ def build(base, output, root=ROOT, write_contract=False):
         Path(temporary).replace(output)
     except FileNotFoundError:
         raise ValueError(f'The new Mantella.exe disappeared while it was being written to {output}. ' + ANTIVIRUS_HINT)
+    except PermissionError:
+        # Windows refuses to replace a running exe ([WinError 5] access denied, or 32 in use by another process)
+        raise ValueError(IN_USE_HINT)
     finally:
         Path(temporary).unlink(missing_ok=True)
     check_written(output, data)
-    report['base_name'] = contract['bases'][base_hash]['name']
-    return report
+
+
+EXE = 'SKSE/Plugins/MantellaSoftware/Mantella.exe'
+
+
+def base_candidates(root=ROOT):
+    """Where stock Mantella's Mantella.exe can be: the sibling mod folders (Mod Organizer 2, or Vortex when setup runs
+    from its staging folder), then Vortex's default staging folders."""
+    import os
+    yield from Path(root).parent.glob('*/' + EXE)
+    appdata = os.environ.get('APPDATA')
+    if appdata:
+        for game in ('skyrimse', 'skyrimvr'):
+            yield from (Path(appdata) / 'Vortex' / game / 'mods').glob('*/' + EXE)
 
 
 def find_base(root=ROOT):
-    """Picks stock Mantella's Mantella.exe from the sibling MO2 mod folders."""
+    """Picks stock Mantella's Mantella.exe from the places base_candidates lists."""
     sys.path.insert(0, str(root / 'Source/backend'))
     from frozen_patch import sha256
     bases = json.loads(CONTRACT.read_text(encoding='utf-8'))['bases']
     found = {}
-    for candidate in root.parent.glob('*/SKSE/Plugins/MantellaSoftware/Mantella.exe'):
+    for candidate in base_candidates(root):
         if candidate.resolve() == OUTPUT.resolve():
             continue
-        digest = sha256(candidate.read_bytes())
+        try:
+            digest = sha256(candidate.read_bytes())
+        except OSError:
+            continue  # a locked or unreadable copy is not the one to patch
         if digest in bases:
-            found[bases[digest]['name']] = candidate
+            found.setdefault(bases[digest]['name'], candidate)  # the first place listed wins
     return found.get('Mantella 0.14')
+
+
+FLOWS_TOOL = Path('tools/Mantella Living World - OStim Expansion/flowgen.py')
+FLOWS_TIMEOUT = 600  # seconds; a normal build takes well under a minute
+FLOWS_NOT_ENABLED = 3  # flowgen's exit code when the mod it is in is not enabled in the profile it read
+
+
+def find_flowgens(root=ROOT):
+    """Every copy of Mantella Living World - OStim Expansion's flow builder: the one in this mod (All in One) first,
+    then those in sibling mod folders."""
+    root = Path(root)
+    own = [root / FLOWS_TOOL] if (root / FLOWS_TOOL).is_file() else []
+    return own + [p for p in sorted(root.parent.glob('*/' + FLOWS_TOOL.as_posix())) if not own or p.resolve() != own[0].resolve()]
+
+
+def find_flowgen(root=ROOT):
+    """The first copy of the flow builder (find_flowgens), or None."""
+    return next(iter(find_flowgens(root)), None)
+
+
+def build_flows(root=ROOT, timeout=FLOWS_TIMEOUT):
+    """Builds the OStim flows when OStim Expansion is installed. Says nothing when it is not. A copy whose mod is not
+    enabled in the Mod Organizer 2 profile the flow builder reads (it names that profile) is passed over for the next.
+    Returns True (built), False (failed) or None (not installed or not enabled). Never stops the setup."""
+    import subprocess
+    copies = find_flowgens(root)
+    if not copies:
+        return None
+    print()
+    print('Building OStim flows...', flush=True)
+    sys.stderr.flush()
+    # a question from the flow builder (where Mod Organizer 2 is) can be answered in this window; with no
+    # window to answer in, it gets no input and stops with its own message instead of waiting forever
+    stdin = None if sys.stdin is not None and sys.stdin.isatty() else subprocess.DEVNULL
+    for flowgen in copies:
+        problem = None
+        try:
+            result = subprocess.run([sys.executable, str(flowgen), '--auto'], stdin=stdin, timeout=timeout)
+            if result.returncode == FLOWS_NOT_ENABLED:
+                continue
+            if result.returncode != 0:
+                problem = 'see the message above'
+        except subprocess.TimeoutExpired:
+            took = f'{timeout // 60} minutes' if timeout >= 60 else f'{timeout} seconds'
+            problem = f'it took longer than {took} and was stopped'
+        except OSError as error:
+            problem = str(error)
+        if problem:
+            print(f'Warning: the OStim flows were not built ({problem}). The backend is built and ready. '
+                  f'Run Build Flows.cmd in {flowgen.parent} later.', flush=True)
+            return False
+        return True
+    print('The OStim flows were not built: OStim Expansion is not enabled in the profile named above. The backend is '
+          'built and ready.', flush=True)
+    return None
+
+
+def under_vortex(root: Path) -> bool:
+    """Setup runs from a Vortex staging folder (...\\Vortex\\<game>\\mods\\<mod>), not from an MO2 mod folder."""
+    parts = [p.lower() for p in Path(root).parts]
+    return any(parts[i] == 'vortex' and parts[i + 2] == 'mods' for i in range(len(parts) - 2))
 
 
 def main():
@@ -219,16 +315,24 @@ def main():
     args = parser.parse_args()
     base = args.base or find_base()
     if base is None:
-        raw = input('Full path to Mantella.exe (from the Mantella mod): ').strip().strip('"')
+        try:
+            raw = input('Full path to Mantella.exe (from the Mantella mod): ').strip().strip('"')
+        except EOFError:  # run with no keyboard input (from a script or tool)
+            raw = ''
         if not raw:
             raise ValueError('No executable selected. Nothing changed.')
         base = Path(raw)
     report = build(base, args.output, write_contract=args.write_contract)
     print('Patched: ' + report['base_name'] + ' (' + str(base) + ')')
     print('Mantella - Direct AI Connect backend ready: ' + str(args.output))
-    print('In MO2\'s left pane, place this mod AFTER (below) Mantella, so its Mantella.exe and scripts win.')
+    if under_vortex(ROOT):
+        print('Vortex: press Deploy now. If Vortex reports a file conflict, set the rule "Mantella - Direct AI Connect '
+              'loads after Mantella", so its Mantella.exe and scripts win.')
+    else:
+        print('In MO2\'s left pane, place this mod AFTER (below) Mantella, so its Mantella.exe and scripts win.')
     print('Dual Input is included: turn off the separate Mantella Dual Input mod if you have it.')
     print('Your original files and settings were not changed.')
+    build_flows()
 
 
 if __name__ == '__main__':

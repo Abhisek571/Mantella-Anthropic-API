@@ -1,7 +1,7 @@
 """Offline tests for src/llm/reliability.py and the rescue paths of ClientBase.streaming_call, with fake clients and
 no network. Mantella's own modules and the SDKs are stubbed; client_base.py and reliability.py are the real files.
 Run with a Python 3.11: test_reliability.py <repo Source/backend dir>"""
-import asyncio, importlib.util, logging, sys, time, types
+import asyncio, importlib.util, json, logging, sys, time, types
 from pathlib import Path
 from threading import Lock
 from types import SimpleNamespace as NS
@@ -455,6 +455,66 @@ ext._registry = ext.Registry()
 run(client())
 check('other services: nothing in the usage log', ext._registry.api_for('t').usage_log() == [])
 
+# ---------- the reply after an action result (NoToolUse): Anthropic (Native) keeps the tools with tool_choice none ----------
+WAVE = [{'type': 'function', 'function': {'name': 'Wave', 'description': 'wave', 'parameters': {'type': 'object', 'properties': {}}}}]
+SCRIPT.plan('claude-sonnet-5-5', native_events('Done.'))
+run(client('Anthropic (Native, cached)', 'claude-sonnet-5-5'), WAVE)
+normal = SCRIPT.calls[0].request
+SCRIPT.plan('claude-sonnet-5-5', native_events('It is done.'))
+items = run(client('Anthropic (Native, cached)', 'claude-sonnet-5-5'), cb.NoToolUse(WAVE))
+blocked = SCRIPT.calls[0].request
+check('native no-tool reply: same tools sent', blocked.get('tools') == normal.get('tools') and blocked.get('tools'), blocked.get('tools'))
+check('native no-tool reply: tool_choice none', blocked.get('tool_choice') == {'type': 'none'} and 'tool_choice' not in normal, (blocked.get('tool_choice'), normal.get('tool_choice')))
+check('native no-tool reply: text passed on', said(items) == 'It is done.' and len(SCRIPT.calls) == 1, items)
+with_call = native_events('Waving. ', stop='tool_use')
+with_call[-1:-1] = [{'type': 'content_block_start', 'index': 1, 'content_block': {'type': 'tool_use', 'id': 'toolu_2', 'name': 'Wave'}},
+                    {'type': 'content_block_delta', 'index': 1, 'delta': {'type': 'input_json_delta', 'partial_json': '{}'}},
+                    {'type': 'content_block_stop', 'index': 1}]
+SCRIPT.plan('claude-sonnet-5-5', with_call)
+items = run(client('Anthropic (Native, cached)', 'claude-sonnet-5-5'), cb.NoToolUse(WAVE))
+check('native no-tool reply: a tool call that comes anyway is not run', said(items) == 'Waving. ' and not any(i[0] == 'tool_calls' for i in items)
+      and logged('may not call actions'), (items, records))
+SCRIPT.plan('claude-sonnet-5-5', with_call)
+items = run(client('Anthropic (Native, cached)', 'claude-sonnet-5-5'), WAVE)
+check('native normal reply: tool call still runs', any(i[0] == 'tool_calls' for i in items), items)
+SCRIPT.plan('main/model', text_reply('It is done.'))
+items = run(client(), cb.NoToolUse(WAVE))
+check('OpenRouter no-tool reply: no tools sent, as before', 'tools' not in SCRIPT.calls[0].params and 'tool_choice' not in SCRIPT.calls[0].params and said(items) == 'It is done.', SCRIPT.calls[0].params)
+SCRIPT.plan('claude-sonnet-5-5', err(503)); SCRIPT.plan('main/model', text_reply('From OpenRouter.'))
+items = run(client('Anthropic (Native, cached)', 'claude-sonnet-5-5', reliability={'fallback_models': [{'service': 'OpenRouter', 'model': 'main/model'}]}, params=RULED), cb.NoToolUse(WAVE))
+check('native out, OpenRouter fallback: no tools there', said(items) == 'From OpenRouter.' and SCRIPT.calls[0].request.get('tool_choice') == {'type': 'none'}
+      and 'tools' not in SCRIPT.calls[1].params, [c.params for c in SCRIPT.calls])
+fc_client = client('Anthropic (Native, cached)', 'claude-sonnet-5-5')
+fc_client._function_client = NS(check_for_actions=lambda messages, tools: (_ for _ in ()).throw(AssertionError('function LLM asked')))
+SCRIPT.plan('claude-sonnet-5-5', native_events('Fine.'))
+items = run(fc_client, cb.NoToolUse(WAVE))
+check('separate function LLM: not asked, no tools sent, as before', said(items) == 'Fine.' and 'tools' not in SCRIPT.calls[0].request, SCRIPT.calls[0].request)
+
+# ---------- server_actions: an extension builds an action itself (the model never chooses it) ----------
+ext._registry = ext.Registry()
+BUILT = {'id': 'toolu_built1', 'type': 'function', 'function': {'name': 'Wave', 'arguments': '{}'}}
+HIDDEN = {'id': 'toolu_built2', 'type': 'function', 'function': {'name': 'Hidden', 'arguments': '{}'}}
+ext._registry.api_for('t').on('server_actions', lambda tools, ctx: [BUILT, HIDDEN])
+SCRIPT.plan('claude-sonnet-5-5', native_events('Fine.'))
+items = run(client('Anthropic (Native, cached)', 'claude-sonnet-5-5'), cb.NoToolUse(WAVE))
+check('server action on a no-tool reply: sent first, model still speaks', items[0] == ('tool_calls', [BUILT]) and said(items) == 'Fine.', items)
+check('server action: an action Mantella did not generate is dropped', logged("'Hidden': it was not offered"), records)
+check('server action: same tools for the cache, tool_choice none', SCRIPT.calls[0].request.get('tools') == normal.get('tools')
+      and SCRIPT.calls[0].request.get('tool_choice') == {'type': 'none'}, SCRIPT.calls[0].request)
+SCRIPT.plan('claude-sonnet-5-5', native_events('Fine.'))
+items = run(client('Anthropic (Native, cached)', 'claude-sonnet-5-5'), WAVE)
+check('server action on a normal reply: the model calls none of its own', items[0] == ('tool_calls', [BUILT])
+      and SCRIPT.calls[0].request.get('tool_choice') == {'type': 'none'}, SCRIPT.calls[0].request)
+SCRIPT.plan('main/model', text_reply('Fine.'))
+items = run(client(), WAVE)
+check('server action, OpenRouter: sent, no tools on the request', items[0] == ('tool_calls', [BUILT]) and 'tools' not in SCRIPT.calls[0].params, SCRIPT.calls[0].params)
+ext._registry = ext.Registry()
+ext._registry.api_for('t').on('server_actions', lambda tools, ctx: [])
+SCRIPT.plan('claude-sonnet-5-5', native_events('Fine.'))
+items = run(client('Anthropic (Native, cached)', 'claude-sonnet-5-5'), WAVE)
+check('no server action: request as before', not any(i[0] == 'tool_calls' for i in items) and 'tool_choice' not in SCRIPT.calls[0].request, SCRIPT.calls[0].request)
+ext._registry = ext.Registry()
+
 # ---------- one-shot native requests (summaries) ----------
 class SyncNative:
     plan = []
@@ -482,6 +542,51 @@ check('native one-shot: retries bounded, then None', one_shot(overloaded, overlo
 check('native one-shot: bad request not retried', one_shot(err(400, body={'type': 'error', 'error': {'type': 'invalid_request_error'}}), 'Never.') is None and SyncNative.calls == 1 and naps == [])
 check('native one-shot: plain answer sent once', one_shot('Summary.') == 'Summary.' and SyncNative.calls == 1 and naps == [])
 cb.time.sleep = real_sleep
+
+# ---------- server_actions: a helper model call inside the hook never freezes or delays the server ----------
+import threading as _threading
+def run_bounded(the_client, tools, seconds=10):
+    """run() in a thread; None when it did not finish in time (a deadlock or a frozen loop)."""
+    box = {}
+    worker = _threading.Thread(target=lambda: box.setdefault('items', run(the_client, tools)), daemon=True)
+    worker.start(); worker.join(seconds)
+    return box.get('items')
+same = client('Anthropic (Native, cached)', 'claude-sonnet-5-5')
+same.generate_native_client = lambda is_async: FakeNative() if is_async else SyncNative()
+def helper_hook(tools, ctx):  # like the Console action: one summary-model call on the SAME client
+    answer = same.request_call(Thread())
+    return [{'id': 'toolu_helper', 'type': 'function', 'function': {'name': 'Wave', 'arguments': json.dumps({'said': answer})}}]
+ext._registry = ext.Registry()
+ext._registry.api_for('t').on('server_actions', helper_hook)
+SyncNative.plan, SyncNative.calls = ['Helper answer.'], 0
+SCRIPT.plan('claude-sonnet-5-5', native_events('Fine.'))
+items = run_bounded(same, WAVE)
+check('server action: a helper call on the same client does not deadlock', items is not None
+      and items[0][0] == 'tool_calls' and 'Helper answer.' in items[0][1][0]['function']['arguments'] and said(items) == 'Fine.', items)
+ext._registry = ext.Registry()
+gate = _threading.Event()
+ext._registry.api_for('t').on('server_actions', lambda tools, ctx: gate.wait(30) and [BUILT])
+ticks = []
+async def with_ticker(the_client):
+    async def ticker():
+        while not gate.is_set():
+            ticks.append(1); await asyncio.sleep(0.02)
+    task = asyncio.ensure_future(ticker())
+    result = [item async for item in the_client.streaming_call(Thread(), False, WAVE)]
+    gate.set(); await task
+    return result
+old_seconds = ClientBase.SERVER_ACTION_SECONDS
+ClientBase.SERVER_ACTION_SECONDS = 0.5
+SCRIPT.plan('claude-sonnet-5-5', native_events('Fine.'))
+started = time.time()
+items = asyncio.run(with_ticker(client('Anthropic (Native, cached)', 'claude-sonnet-5-5')))
+took = time.time() - started
+check('server action: a hanging hook is cut off after its time limit, the model still speaks', said(items) == 'Fine.'
+      and not any(i[0] == 'tool_calls' for i in items) and took < 3 and logged('took longer than'), (took, items))
+check('server action: the server keeps answering while the hook runs (loop not blocked)', len(ticks) >= 10, len(ticks))
+ClientBase.SERVER_ACTION_SECONDS = old_seconds
+gate.set()
+ext._registry = ext.Registry()
 
 print('RESULT: ' + ('ALL PASS' if not FAILS else f'{len(FAILS)} FAILED: {FAILS}'))
 sys.exit(1 if FAILS else 0)

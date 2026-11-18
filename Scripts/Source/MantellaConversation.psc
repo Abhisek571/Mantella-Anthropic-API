@@ -27,6 +27,7 @@ String[] _ingameEvents
 String[] _extraRequestActions
 int[] _actorHandles = None
 bool _actorsUpdated = false
+int _actorBuilds = 0 ; BuildNpcsInConversationArray calls, so StartConversation can tell whether AddActors rebuilt
 int _contextHandle = 0
 bool _does_accept_player_input = false
 bool _isTalking = false
@@ -92,8 +93,15 @@ function StartConversation(Actor[] actorsToStartConversationWith)
     ; send request to initialize Mantella settings (set LLM connection, start up TTS service, load character_df etc) 
     ; while waiting for actor info and context to be prepared below
     SKSE_HTTP.sendLocalhostHttpRequest(handle, repository.HttpPort, mConsts.HTTP_ROUTE_MAIN)
-    
+
+    int buildsBefore = _actorBuilds
     AddActors(actorsToStartConversationWith)
+    ; AddActors rebuilds the actor dictionaries only when someone new joins. When everyone is already in Participants
+    ; (kept in the save from a talk that was saved or never cleaned up), _actorHandles still holds SKSE_HTTP handles
+    ; from an earlier session, which do not survive a load: the start request would carry no actors.
+    If _actorBuilds == buildsBefore
+        BuildNpcsInConversationArray()
+    EndIf
 
     if(actorsToStartConversationWith.Length < 2)
         Debug.Notification("Not enough characters to start a conversation.")
@@ -629,6 +637,9 @@ function MDI_OpenReservedTextMenu(int sessionGeneration)
                 ClearRepeatingMessage()
                 sendRequestForPlayerInput(result, updateContext=False)
                 return
+            elseif sessionGeneration == _mdiSessionGeneration && _mdiSessionActive
+                ; another line came in while the box was open and took the turn: say so rather than drop the text
+                Debug.Notification("Mantella: Reply not sent, an NPC spoke first. Type it again.")
             endIf
         endIf
     endIf
@@ -1092,6 +1103,7 @@ int[] function BuildNpcsInConversationArray()
         i += 1
     EndWhile
     _actorsUpdated = true
+    _actorBuilds += 1
 endFunction
 
 int[] function UpdateNpcsInConversationArray()

@@ -5,6 +5,7 @@
 from enum import Enum
 from threading import Thread, Lock
 import time
+import traceback
 from typing import Any
 from src.llm.ai_client import AIClient
 from src.llm.sentence_content import SentenceTypeEnum, SentenceContent
@@ -46,6 +47,38 @@ def trim_limits(limit, token_limit, system_tokens=0, minimum=4000) -> tuple[floa
     if limit + system_tokens >= token_limit * 0.9:
         return None
     return round((limit + system_tokens) / token_limit, 6), round(limit / 4 / token_limit, 6)
+
+
+def _end_sentence_queue(sentences, speaker) -> None:
+    """Ends a reply the way ChatManager.generate_response does when it finishes: no more sentences are coming, and one
+    empty sentence goes in for a reader that is already waiting in get_next_sentence."""
+    sentences.is_more_to_come = False
+    sentences.put(Sentence(SentenceContent(speaker, "", SentenceTypeEnum.SPEECH, True), "", 0))
+
+
+def _generate_into_queue(generate, sentences, speaker) -> None:
+    """Runs one reply generation. Whatever it does (returns early without ending the reply, or raises), the queue is
+    never left waiting: get_next_sentence blocks while is_more_to_come is set, which froze every request."""
+    try:
+        generate()
+    except Exception:
+        logger.error(f"The NPC reply stopped with an error:\n{traceback.format_exc()}")
+    finally:
+        if sentences.is_more_to_come:
+            _end_sentence_queue(sentences, speaker)
+
+
+def _speaker_base_id(npc) -> str:
+    """The NPC's base record id the way the Living World Hub names npc/<id>.json: the last 6 hex digits of the full
+    FormID, upper case, no "0x" (a light plugin's id keeps its FExxx digits after the FE). game_manager stores that
+    as hub_base_id; Mantella's own base_id masks a light plugin's id down to its low 3 digits, so it is only the
+    fallback."""
+    value = str(getattr(npc, 'hub_base_id', '') or getattr(npc, 'base_id', '') or '').strip().upper()
+    if value.startswith('0X'):
+        value = value[2:]
+    if not value or any(c not in '0123456789ABCDEF' for c in value):
+        return ''
+    return value.rjust(6, '0')[-6:]
 
 
 def _system_tokens(client, messages) -> int:
@@ -239,6 +272,11 @@ class Conversation:
             self.last_sentence_start_time = time.time()
             return comm_consts.KEY_REPLYTYPE_NPCTALK, next_sentence
         else:
+            npcs = self.__context.npcs_in_conversation
+            if not npcs.get_non_player_characters() and not npcs.get_player_character():
+                # nobody can speak or answer (an NPC-to-NPC talk that lost its NPCs): end instead of asking again
+                logger.warning("Nobody is left in the conversation; ending it")
+                return comm_consts.KEY_REPLYTYPE_ENDCONVERSATION, None
             # Check if end conversation was requested via tool call
             if self.__output_manager.end_conversation_requested:
                 self.__output_manager.clear_end_conversation_requested()
@@ -406,6 +444,9 @@ class Conversation:
             game_days (float): the full game timestamp (days.fraction)
         """
         self.__context.update_context(location, time, custom_ingame_events, weather, npcs_nearby, custom_context_values, config_settings, game_days)
+        note = getattr(self.__rememberer, 'note_game_days', None)
+        if note:  # the memory text built for this update knows the game time it was sent at (None: not sent)
+            note(game_days)
         if self.__context.have_actors_changed:
             self.__update_conversation_type()
             self.__context.have_actors_changed = False
@@ -571,10 +612,14 @@ class Conversation:
         self.__save_conversation(is_reload=False, end_timestamp=end_timestamp)
     
     def __note_speaking_npcs(self):
-        """Names the NPCs of this reply for the usage log; a failure here must not stop the reply."""
+        """Names the NPCs of this reply for the usage log, and their base ids for extensions that need the speakers
+        before the game has written its speaker file; a failure here must not stop the reply."""
         try:
             import src.extensions as src_extensions
-            src_extensions.registry().speaking = ', '.join(npc.name for npc in self.__context.npcs_in_conversation.get_non_player_characters())
+            registry = src_extensions.registry()
+            npcs = self.__context.npcs_in_conversation.get_non_player_characters()
+            registry.speaking = ', '.join(npc.name for npc in npcs)
+            registry.speaking_ids = [i for i in (_speaker_base_id(npc) for npc in npcs) if i]
         except Exception as e:
             logger.debug(f"Could not note the NPCs for the usage log: {e}")
 
@@ -583,18 +628,30 @@ class Conversation:
         """Starts a background Thread to generate sentences into the SentenceQueue"""    
         with self.__generation_start_lock:
             if not self.__generation_thread or not self.__generation_thread.is_alive():
+                npcs = self.__context.npcs_in_conversation
+                if not npcs.last_added_character:
+                    # generate_response returns at once here without ending the reply; don't leave the queue waiting
+                    logger.warning("No NPC in the conversation; nothing to generate")
+                    _end_sentence_queue(self.__sentences, npcs.get_player_character())
+                    return
+                speaker = npcs.last_added_character
                 self.__sentences.is_more_to_come = True
                 # Generate tools if advanced actions are enabled
                 tools = None
-                if self.context.config.advanced_actions_enabled and allow_tool_use:
+                if self.context.config.advanced_actions_enabled:
                     tools = FunctionManager.generate_context_aware_tools(self.__context, self.__game)
+                    if not allow_tool_use and tools:
+                        # Anthropic (Native) still sends them with tool_choice none, for the cache; other services get none
+                        from src.llm.client_base import NoToolUse
+                        tools = NoToolUse(tools)
                 # Capture current OpenTelemetry context for the new thread
                 opentelemetry_context = OpenTelemetryContext.get_current()
                 keyword_actions = self.__offered_keyword_actions(self.context.config.actions)
                 self.__note_speaking_npcs()
                 def thread_target():
                     set_parent_context(opentelemetry_context)
-                    self.__output_manager.generate_response(self.__messages, self.__context.npcs_in_conversation, self.__sentences, keyword_actions, tools, self.__game)
+                    _generate_into_queue(lambda: self.__output_manager.generate_response(self.__messages, self.__context.npcs_in_conversation, self.__sentences, keyword_actions, tools, self.__game),
+                                         self.__sentences, speaker)
                 self.__generation_thread = Thread(target=thread_target)
                 self.__generation_thread.start()
 
@@ -644,12 +701,11 @@ class Conversation:
         for npc in npcs_to_summarize:
             conversation_log.save_conversation_log(npc, self.__messages.transform_to_openai_messages(self.__messages.get_talk_only()), self.__context.world_id)
         
-        # Skip summary generation if disabled (but always allow reloads to save state)
-        if not is_reload and not self.__context.config.conversation_summary_enabled:
+        # Skip the stock summary if disabled (but always allow reloads to save state). The summarize extensions still
+        # run: they keep their own memory and reset their per-talk state there.
+        stock_summary = is_reload or self.__context.config.conversation_summary_enabled
+        if not stock_summary:
             logger.info("Conversation summaries disabled. Skipping summary generation.")
-            # Even when skipping summaries, clear any pending shares to avoid leaking them
-            npcs.clear_pending_shares()
-            return
 
         # Get and clear pending shares (only on final save, not reload)
         pending_shares = None
@@ -663,7 +719,7 @@ class Conversation:
 
         is_radiant = isinstance(self.__conversation_type, radiant)
         self.__rememberer.save_conversation_state(self.__messages, npcs_to_summarize, npcs, self.__context.world_id, is_reload, pending_shares, end_timestamp, is_radiant,
-                                                  departed=departed_npcs is not None)
+                                                  departed=departed_npcs is not None, stock_summary=stock_summary)
 
     @utils.time_it
     def __initiate_reload_conversation(self):

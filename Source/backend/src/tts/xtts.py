@@ -27,6 +27,9 @@ def _warn_accent_risk(accent: str, language: str):
                        "noise to some voice lines (mostly short ones). Turn off 'XTTS Accent' in the Mantella UI if you hear it.")
 
 
+
+SYNTHESIZE_TIMEOUT = (10, 120)  # seconds to connect, and to wait for the voiced line
+
 class TTSServiceFailure(Exception):
     pass
 
@@ -206,12 +209,20 @@ class XTTS(TTSable):
                 'language': self._language,
                 'accent': self.__voice_accent,
             }
-            return requests.post(self.__xtts_synthesize_url, json=data)
+            # a time limit: a stalled XTTS server must not hold the talk (and its end) forever
+            return requests.post(self.__xtts_synthesize_url, json=data, timeout=SYNTHESIZE_TIMEOUT)
 
-        response = get_voiceline(self._last_voice.lower())
-        if response and response.status_code == 200:
+        if not self._last_voice:
+            logger.error('XTTS: no voice model was found for this NPC; the line is not voiced')
+            return
+        try:
+            response = get_voiceline(self._last_voice.lower())
+        except requests.RequestException as e:
+            logger.error(f"XTTS did not voice the line with '{self._last_voice}' ({e})")
+            return
+        if response.status_code == 200:  # a Response with an error status is falsy: compare the status itself
             self._convert_to_16bit(io.BytesIO(response.content), save_path)
-        elif response:
+        else:
             logger.error(f"Failed with '{self._last_voice}'. HTTP Error: {response.status_code}")
 
 
