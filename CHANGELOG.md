@@ -2,7 +2,7 @@
 
 Every change to Mantella - Direct AI Connect. The Nexus page lists only the main changes for each version.
 
-## Unreleased
+## 1.5.0 (2026-11-18)
 
 ### New
 - Anthropic (Native, cached): up to 4 cache points placed by value: the newest message, the system prompt's own points (with Mantella Living World: the part every NPC shares, the NPC's fixed text, the end), the end of the action list, the last NPC reply. The action list and shared rules are read from the cache when you start talking to another NPC with the same actions within 5 minutes; before, the first reply of every talk wrote the whole prompt to the cache again.
