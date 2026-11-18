@@ -232,7 +232,7 @@ def cached_prefix(req):
     return json.dumps([b for _, b in flat[:last + 1]])
 check('scene after the last cache point', 'The time is' not in cached_prefix(req_m) and 'The time is' in json.dumps(req_m['messages'][-1]))
 # stock Mantella without extensions: its '# Current Scene' section leaves the cached system prompt for the newest message
-STOCK = ('# Overview\nYou are Mjoll in Skyrim.\n\n# Background\nVega is a Nord.\n\n# History\n\n\n# Current Scene\n'
+STOCK = ('# Overview\nYou are Mjoll in Skyrim.\n\n# Background\nInga is a Nord.\n\n# History\n\n\n# Current Scene\n'
          'You are now in Riverwood. The time is {hour} in the afternoon. \n\n# Rules\nStay in character.\n\nRespond as Mjoll now in English.')
 stock_turn = lambda hour: [{'role': 'system', 'content': STOCK.format(hour=hour)}] + talk_m[1:]
 req_s1 = native.build_request('claude-sonnet-5-5', stock_turn(1), None, None, {}, cache=True)
