@@ -58,7 +58,7 @@ check('lookalike host refused', not local('localhost.evil.example:4999', None) a
 # safe summary folder names
 sm = load('src/remember/summaries.py', {'_UNSAFE_PATH_CHARS', '_safe_part'}, {'re': re})
 safe = sm['_safe_part']
-check('ordinary names unchanged', safe('Lydia') == 'Lydia' and safe('Whiterun Guard') == 'Whiterun Guard' and safe('CHAD1') == 'CHAD1')
+check('ordinary names unchanged', safe('Lydia') == 'Lydia' and safe('Whiterun Guard') == 'Whiterun Guard' and safe('BROM1') == 'BROM1')
 for odd in ('../../x', '..\\..\\x', 'a/b', 'Jarl: Balgruuf', 'Who?', '', '. '):
     out = safe(odd)
     check(f'odd name made safe: {odd!r} -> {out!r}', out and not re.search(r'[<>:"/\\|?*]', out) and '..' not in out and not out.endswith(('.', ' ')))
