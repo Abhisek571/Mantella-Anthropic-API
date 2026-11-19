@@ -197,6 +197,34 @@ def drop_changed_thinking(request: dict[str, Any], thinking_by_tool_call: dict[s
             logger.debug("Anthropic (Native): the conversation before the last action changed, so its thinking is not sent back")
 
 
+def _system_text(content: Any) -> str:
+    """A system message's text ('' when it has none); a list of parts is joined line by line."""
+    if isinstance(content, list):
+        content = '\n'.join(p.get('text', '') for p in content if isinstance(p, dict))
+    return str(content) if content else ''
+
+
+def _assistant_blocks(content: Any, tool_calls: list[dict]) -> list[dict]:
+    """An assistant turn's text and its tool calls as tool_use blocks (arguments that are not a JSON object: {})."""
+    blocks: list[dict] = []
+    if isinstance(content, str) and content.strip():
+        blocks.append({'type': 'text', 'text': content})
+    for call in tool_calls:
+        function = call.get('function') or {}
+        try:
+            arguments = json.loads(function.get('arguments') or '{}')
+        except json.JSONDecodeError:
+            arguments = {}
+        blocks.append({'type': 'tool_use', 'id': call.get('id', ''), 'name': function.get('name', ''),
+                       'input': arguments if isinstance(arguments, dict) else {}})
+    return blocks
+
+
+def _tool_result_block(message: dict) -> dict:
+    content = message.get('content')
+    return {'type': 'tool_result', 'tool_use_id': message.get('tool_call_id', ''), 'content': str(content) if content else 'done'}
+
+
 def convert_messages(openai_messages: list[dict], thinking_by_tool_call: dict[str, Any]) -> tuple[list[dict], list[dict]]:
     """OpenAI chat messages -> (system blocks, Messages API messages).
 
@@ -220,34 +248,18 @@ def convert_messages(openai_messages: list[dict], thinking_by_tool_call: dict[st
     for message in openai_messages:
         role = message.get('role')
         if role in ('system', 'developer'):
-            text = message.get('content')
-            if isinstance(text, list):
-                text = '\n'.join(p.get('text', '') for p in text if isinstance(p, dict))
+            text = _system_text(message.get('content'))
             if text:
-                system_texts.append(str(text))
+                system_texts.append(text)
         elif role == 'user':
             add('user', _user_content(message.get('content')))
         elif role == 'assistant':
-            blocks: list[dict] = []
             tool_calls = message.get('tool_calls') or []
-            text = message.get('content')
-            if isinstance(text, str) and text.strip():
-                blocks.append({'type': 'text', 'text': text})
-            for call in tool_calls:
-                function = call.get('function') or {}
-                try:
-                    arguments = json.loads(function.get('arguments') or '{}')
-                except json.JSONDecodeError:
-                    arguments = {}
-                blocks.append({'type': 'tool_use', 'id': call.get('id', ''), 'name': function.get('name', ''),
-                               'input': arguments if isinstance(arguments, dict) else {}})
-            add('assistant', blocks)
+            add('assistant', _assistant_blocks(message.get('content'), tool_calls))
             if tool_calls:  # the thinking for one assistant turn is stored under its first tool call
                 replay = (len(messages) - 1, stored_thinking(thinking_by_tool_call.get(tool_calls[0].get('id', ''))))
         elif role == 'tool':
-            content = message.get('content')
-            add('user', [{'type': 'tool_result', 'tool_use_id': message.get('tool_call_id', ''),
-                          'content': str(content) if content else 'done'}])
+            add('user', [_tool_result_block(message)])
 
     # tool results must open their user turn
     for message in messages:
@@ -282,9 +294,14 @@ long_cache = False
 shared_long_cache = True
 
 
+def by_model_prefix(table: dict[str, Any], model: str, default: Any = None) -> Any:
+    """The value of the longest key in table that model starts with (a dated id gets its family's), else default."""
+    matches = [prefix for prefix in table if (model or '').startswith(prefix)]
+    return table[max(matches, key=len)] if matches else default
+
+
 def cache_minimum(model: str) -> int:
-    matches = [prefix for prefix in CACHE_MINIMUM if (model or '').startswith(prefix)]
-    return CACHE_MINIMUM[max(matches, key=len)] if matches else 1024
+    return by_model_prefix(CACHE_MINIMUM, model, 1024)
 
 
 def _last_cacheable(blocks: list[dict]) -> dict | None:
@@ -466,10 +483,10 @@ PRICES = {
 
 def reply_cost(model: str, usage: dict) -> float | None:
     """Dollar cost of one reply from its usage numbers; None for a model without a known price."""
-    matches = [prefix for prefix in PRICES if (model or '').startswith(prefix)]
-    if not matches:
+    prices = by_model_prefix(PRICES, model)
+    if prices is None:
         return None
-    new, write, read, out = PRICES[max(matches, key=len)]
+    new, write, read, out = prices
     long_write = usage.get('cache_write_1h', 0)  # the 1-hour cache is written at twice the input price
     return (usage.get('uncached', 0) * new + (usage.get('cache_write', 0) - long_write) * write + long_write * 2 * new
             + usage.get('cache_read', 0) * read + usage.get('output', 0) * out) / 1e6
@@ -534,56 +551,74 @@ class StreamState:
 
     def handle(self, event: Any) -> str | None:
         """Processes one stream event. Returns text to speak, if any."""
-        kind = _field(event, 'type')
-        if kind == 'message_start':
-            message = _field(event, 'message')
-            self.usage = log_usage(_field(message, 'usage'), points=self.points)
-        elif kind == 'content_block_start':
-            block = _field(event, 'content_block')
-            block_type = _field(block, 'type')
-            index = _field(event, 'index', len(self.blocks))
-            if block_type == 'tool_use':
-                self.blocks[index] = {'type': 'tool_use', 'id': _field(block, 'id', ''), 'name': _field(block, 'name', ''), 'json': ''}
-            elif block_type == 'thinking':
-                self.blocks[index] = {'type': 'thinking', 'thinking': _field(block, 'thinking', '') or '', 'signature': _field(block, 'signature', '') or ''}
-            elif block_type == 'redacted_thinking':
-                self.thinking.append({'type': 'redacted_thinking', 'data': _field(block, 'data', '')})
-            elif block_type == 'fallback':
-                self.fell_back_to = _field(_field(block, 'to'), 'model')
-                logger.log(23, f"Anthropic (Native): the reply was declined and continued on {self.fell_back_to}")
-                # tool calls and thinking from the declined attempt are not echoed back
-                self.tool_calls.clear()
-                self.thinking.clear()
-                self.blocks.clear()
-        elif kind == 'content_block_delta':
-            delta = _field(event, 'delta')
-            delta_type = _field(delta, 'type')
-            block = self.blocks.get(_field(event, 'index'))
-            if delta_type == 'text_delta':
-                text = _field(delta, 'text', '')
-                if text:
-                    self.got_text = True
-                    return text
-            elif delta_type == 'input_json_delta' and block is not None:
-                block['json'] += _field(delta, 'partial_json', '') or ''
-            elif delta_type == 'thinking_delta' and block is not None:
-                block['thinking'] += _field(delta, 'thinking', '') or ''
-            elif delta_type == 'signature_delta' and block is not None:
-                block['signature'] += _field(delta, 'signature', '') or ''
-        elif kind == 'content_block_stop':
-            block = self.blocks.pop(_field(event, 'index'), None)
-            if block and block['type'] == 'tool_use':
-                self.tool_calls.append({'id': block['id'], 'type': 'function',
-                                        'function': {'name': block['name'], 'arguments': block['json'] or '{}'}})
-            elif block and block['type'] == 'thinking':
-                self.thinking.append({'type': 'thinking', 'thinking': block['thinking'], 'signature': block['signature']})
-        elif kind == 'message_delta':
-            self.stop_reason = _field(_field(event, 'delta'), 'stop_reason') or self.stop_reason
-            self.stop_sequence = _field(_field(event, 'delta'), 'stop_sequence') or self.stop_sequence
-            output = _field(_field(event, 'usage'), 'output_tokens')
-            if self.usage is not None and output is not None:
-                self.usage['output'] = output
+        handler = self._EVENT_HANDLERS.get(_field(event, 'type'))
+        return handler(self, event) if handler else None
+
+    def _on_message_start(self, event: Any) -> None:
+        self.usage = log_usage(_field(_field(event, 'message'), 'usage'), points=self.points)
+
+    def _on_block_start(self, event: Any) -> None:
+        block = _field(event, 'content_block')
+        block_type = _field(block, 'type')
+        index = _field(event, 'index', len(self.blocks))
+        if block_type == 'tool_use':
+            self.blocks[index] = {'type': 'tool_use', 'id': _field(block, 'id', ''), 'name': _field(block, 'name', ''), 'json': ''}
+        elif block_type == 'thinking':
+            self.blocks[index] = {'type': 'thinking', 'thinking': _field(block, 'thinking', '') or '', 'signature': _field(block, 'signature', '') or ''}
+        elif block_type == 'redacted_thinking':
+            self.thinking.append({'type': 'redacted_thinking', 'data': _field(block, 'data', '')})
+        elif block_type == 'fallback':
+            self.fell_back_to = _field(_field(block, 'to'), 'model')
+            logger.log(23, f"Anthropic (Native): the reply was declined and continued on {self.fell_back_to}")
+            # tool calls and thinking from the declined attempt are not echoed back
+            self.tool_calls.clear()
+            self.thinking.clear()
+            self.blocks.clear()
+
+    # delta type -> (field of the open block it extends, field of the delta that holds the new part)
+    _DELTA_FIELDS = {
+        'input_json_delta': ('json', 'partial_json'),
+        'thinking_delta': ('thinking', 'thinking'),
+        'signature_delta': ('signature', 'signature'),
+    }
+
+    def _on_block_delta(self, event: Any) -> str | None:
+        delta = _field(event, 'delta')
+        delta_type = _field(delta, 'type')
+        if delta_type == 'text_delta':
+            text = _field(delta, 'text', '')
+            if text:
+                self.got_text = True
+                return text
+            return None
+        block = self.blocks.get(_field(event, 'index'))
+        if block is not None and delta_type in self._DELTA_FIELDS:
+            block_field, delta_field = self._DELTA_FIELDS[delta_type]
+            block[block_field] += _field(delta, delta_field, '') or ''
         return None
+
+    def _on_block_stop(self, event: Any) -> None:
+        block = self.blocks.pop(_field(event, 'index'), None)
+        if block and block['type'] == 'tool_use':
+            self.tool_calls.append({'id': block['id'], 'type': 'function',
+                                    'function': {'name': block['name'], 'arguments': block['json'] or '{}'}})
+        elif block and block['type'] == 'thinking':
+            self.thinking.append({'type': 'thinking', 'thinking': block['thinking'], 'signature': block['signature']})
+
+    def _on_message_delta(self, event: Any) -> None:
+        self.stop_reason = _field(_field(event, 'delta'), 'stop_reason') or self.stop_reason
+        self.stop_sequence = _field(_field(event, 'delta'), 'stop_sequence') or self.stop_sequence
+        output = _field(_field(event, 'usage'), 'output_tokens')
+        if self.usage is not None and output is not None:
+            self.usage['output'] = output
+
+    _EVENT_HANDLERS = {
+        'message_start': _on_message_start,
+        'content_block_start': _on_block_start,
+        'content_block_delta': _on_block_delta,
+        'content_block_stop': _on_block_stop,
+        'message_delta': _on_message_delta,
+    }
 
 
 async def stream_reply(client: Any, request: dict[str, Any], thinking_by_tool_call: dict[str, Any],

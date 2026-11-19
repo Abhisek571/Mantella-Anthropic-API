@@ -676,41 +676,49 @@ class ClientBase(AIClient):
                                                             no_tool_use=no_tool_use)
         return openai_messages, request_params, native_request
 
-    async def _stream_attempt(self, openai_messages: list[dict], request_params: dict[str, Any], native_request: dict[str, Any] | None,
-                              attempt: reliability.Attempt) -> AsyncGenerator[tuple[str, str | list], None]:
+    def _stream_attempt(self, openai_messages: list[dict], request_params: dict[str, Any], native_request: dict[str, Any] | None,
+                        attempt: reliability.Attempt) -> AsyncGenerator[tuple[str, str | list], None]:
         """One streamed request. Text is passed on as it arrives; tool calls come once it has finished. What the service
         answered is left in `attempt`. API errors are raised; a stream without data ends with attempt.stalled set."""
         if native_request is not None:
-            from src.llm import anthropic_native
-            state = anthropic_native.StreamState()
-            async_client = self.generate_native_client(is_async=True)
-            replies = anthropic_native.stream_reply(async_client, native_request, self._thinking_by_tool_call, state, self._stall_seconds)
-            try:
-                async for text in replies:
-                    attempt.spoke = True
-                    yield ("content", text)
-            except TimeoutError:
-                attempt.stalled = True
-            finally:
-                await replies.aclose()  # also when the reader stopped early
-                await reliability.close_client(async_client)
-                if state.usage:  # also for a request that failed after it started: its tokens may be billed
-                    src_extensions.registry().record_usage({'time': time.time(), 'model': self.model_name, **state.usage,
-                                                            'cost': anthropic_native.reply_cost(self.model_name, state.usage)})
-            attempt.finish = state.stop_reason
-            attempt.detail = f"stop_reason={state.stop_reason}, stop_sequence={state.stop_sequence!r}"
-            if attempt.stalled and not attempt.spoke:
-                return  # asked again: its finished tool calls will come again
-            if (native_request.get('tool_choice') or {}).get('type') == 'none' and state.tool_calls:
-                # tool_choice none should make this impossible; never run an action on a reply that may not call one
-                logger.warning(f"Ignored {len(state.tool_calls)} action call(s) on a reply that may not call actions")
-                state.tool_calls.clear()
-            attempt.got_calls = bool(state.tool_calls)
-            offered_calls = only_offered(list(state.tool_calls), request_params.get("tools"))
-            if offered_calls:
-                yield ("tool_calls", offered_calls)
-            return
+            return self._stream_native_attempt(request_params, native_request, attempt)
+        return self._stream_chat_attempt(openai_messages, request_params, attempt)
 
+    async def _stream_native_attempt(self, request_params: dict[str, Any], native_request: dict[str, Any],
+                                     attempt: reliability.Attempt) -> AsyncGenerator[tuple[str, str | list], None]:
+        """_stream_attempt through Anthropic's Messages API (Anthropic (Native, cached))."""
+        from src.llm import anthropic_native
+        state = anthropic_native.StreamState()
+        async_client = self.generate_native_client(is_async=True)
+        replies = anthropic_native.stream_reply(async_client, native_request, self._thinking_by_tool_call, state, self._stall_seconds)
+        try:
+            async for text in replies:
+                attempt.spoke = True
+                yield ("content", text)
+        except TimeoutError:
+            attempt.stalled = True
+        finally:
+            await replies.aclose()  # also when the reader stopped early
+            await reliability.close_client(async_client)
+            if state.usage:  # also for a request that failed after it started: its tokens may be billed
+                src_extensions.registry().record_usage({'time': time.time(), 'model': self.model_name, **state.usage,
+                                                        'cost': anthropic_native.reply_cost(self.model_name, state.usage)})
+        attempt.finish = state.stop_reason
+        attempt.detail = f"stop_reason={state.stop_reason}, stop_sequence={state.stop_sequence!r}"
+        if attempt.stalled and not attempt.spoke:
+            return  # asked again: its finished tool calls will come again
+        if (native_request.get('tool_choice') or {}).get('type') == 'none' and state.tool_calls:
+            # tool_choice none should make this impossible; never run an action on a reply that may not call one
+            logger.warning(f"Ignored {len(state.tool_calls)} action call(s) on a reply that may not call actions")
+            state.tool_calls.clear()
+        attempt.got_calls = bool(state.tool_calls)
+        offered_calls = only_offered(list(state.tool_calls), request_params.get("tools"))
+        if offered_calls:
+            yield ("tool_calls", offered_calls)
+
+    async def _stream_chat_attempt(self, openai_messages: list[dict], request_params: dict[str, Any],
+                                   attempt: reliability.Attempt) -> AsyncGenerator[tuple[str, str | list], None]:
+        """_stream_attempt through an OpenAI-compatible chat completions API (every other service)."""
         # Create async client for main LLM streaming (after function client has run if applicable)
         if self._startup_async_client:
             async_client = self._startup_async_client
@@ -1102,7 +1110,7 @@ For more information, see here: https://art-from-the-machine.github.io/Mantella/
             models: list[dict] = []
             params: dict[str, Any] = {"limit": 1000}
             while True:
-                response = requests.get(f"{utils.ANTHROPIC_ENDPOINT}/models", headers=headers, params=params, timeout=15)
+                response = reliability.get_with_retry(requests.get, f"{utils.ANTHROPIC_ENDPOINT}/models", headers=headers, params=params, timeout=15)
                 if response.status_code != 200:
                     raise Exception(f"Anthropic API returned status {response.status_code}: {response.text}")
                 page = response.json()

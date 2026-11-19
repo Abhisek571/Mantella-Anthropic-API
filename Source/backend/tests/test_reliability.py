@@ -176,6 +176,77 @@ check('stall rescue on by default, no fallback', rel.stall_limit(default, False)
 check('off by default for a local model', rel.stall_limit(default, True) == 0)
 check('local model can opt in', rel.stall_limit(rel.split_settings({'reliability': {'stall_rescue': True}})[1], True) == 15.0)
 check('can be turned off', rel.stall_limit(rel.split_settings({'reliability': {'stall_rescue': False}})[1], False) == 0)
+records.clear()
+odd = rel.split_settings({'reliability': {'stall_rescue': 'yes', 'fallback_models': 'solo/model', 'openrouter_provider': ['x']}})[1]
+check('bad stall_rescue: default, logged', odd['stall_rescue'] is None and logged('"stall_rescue" should be true or false'), records)
+check('one fallback model as a plain string is read', odd['fallback_models'] == [{'service': None, 'model': 'solo/model'}], odd['fallback_models'])
+check('bad openrouter_provider: ignored, logged', odd['openrouter_provider'] is None and logged('"openrouter_provider" should be a'), records)
+check('good openrouter_provider kept', rel.split_settings({'reliability': {'openrouter_provider': {'ignore': ['x']}}})[1]['openrouter_provider'] == {'ignore': ['x']})
+check('blank service means the current one', rel.split_settings({'reliability': {'fallback_models': [{'service': ' ', 'model': ' m '}]}})[1]['fallback_models']
+      == [{'service': None, 'model': 'm'}])
+
+# ---------- HTTP retry on rate limits and server errors (no real waiting) ----------
+class Answer:
+    def __init__(self, status_code, data=None):
+        self.status_code, self.data, self.text = status_code, data or {}, json.dumps(data or {})
+    def json(self): return self.data
+def fake_get(*answers):
+    calls = []
+    def get(url, **kwargs):
+        calls.append((url, kwargs))
+        answer = answers[len(calls) - 1]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+    return get, calls
+waits = []
+get, calls = fake_get(Answer(503), Answer(429), Answer(200))
+check('retry: 5xx then 429 then 200 answers 200', rel.get_with_retry(get, 'u', sleep=waits.append, timeout=15).status_code == 200)
+check('retry: three calls, waits grow 1 then 2 seconds, arguments passed each time', len(calls) == 3 and waits == [1.0, 2.0]
+      and all(c == ('u', {'timeout': 15}) for c in calls), (calls, waits))
+waits.clear(); get, calls = fake_get(Answer(401))
+check('retry: a bad key is not asked again', rel.get_with_retry(get, 'u', sleep=waits.append).status_code == 401 and len(calls) == 1 and not waits)
+waits.clear(); get, calls = fake_get(Answer(500), Answer(502), Answer(500))
+check('retry: gives up after 3 tries with the last answer', rel.get_with_retry(get, 'u', sleep=waits.append).status_code == 500
+      and len(calls) == 3 and waits == [1.0, 2.0], waits)
+waits.clear(); get, calls = fake_get(ConnectionError('down'))
+try:
+    rel.get_with_retry(get, 'u', sleep=waits.append)
+    check('retry: a connection error is raised as before', False)
+except ConnectionError:
+    check('retry: a connection error is raised as before', len(calls) == 1 and not waits)
+waits.clear(); get, calls = fake_get(Answer(429), Answer(200))
+check('retry: attempts and first wait can be set', rel.get_with_retry(get, 'u', attempts=2, first_delay=0.5, sleep=waits.append).status_code == 200 and waits == [0.5])
+
+# the Anthropic model list goes through the retry with the same request as before
+class FakeModelList:
+    def __init__(self, options, default, allows_manual_model_input=False):
+        self.options, self.default = options, default
+real_list, real_get, real_time = cb.LLMModelList, getattr(cb.requests, 'get', None), rel.time
+had_format = hasattr(utils, 'format_context_size')
+cb.LLMModelList, rel.time = FakeModelList, NS(sleep=waits.append)
+if not had_format:
+    utils.format_context_size = lambda n: f'{n // 1000}k'
+try:
+    waits.clear()
+    get, calls = fake_get(Answer(529), Answer(200, {'data': [{'id': 'claude-haiku-5-5', 'display_name': 'Haiku', 'max_input_tokens': 200000}], 'has_more': False}))
+    cb.requests.get = get
+    listed = ClientBase._get_anthropic_model_list(False, False)
+    check('model list: overloaded answer retried, model listed', [m for _, m in listed.options] == ['claude-haiku-5-5'] and waits == [1.0], (listed.options, waits))
+    check('model list: same request as before', calls[0] == (OFFICIAL + '/models', {'headers': {'x-api-key': 'test-an', 'anthropic-version': '2023-06-01'},
+                                                                                   'params': {'limit': 1000}, 'timeout': 15}), calls[0])
+    waits.clear()
+    cb.requests.get, calls = fake_get(Answer(400, {'error': 'bad'}))
+    listed = ClientBase._get_anthropic_model_list(False, False)
+    check('model list: a 400 is shown at once, not retried', listed.default == 'error' and not waits and 'status 400' in listed.options[0][0], listed.options)
+finally:
+    cb.LLMModelList, rel.time = real_list, real_time
+    if real_get is None:
+        del cb.requests.get
+    else:
+        cb.requests.get = real_get
+    if not had_format:
+        del utils.format_context_size
 
 # ---------- the user's rules on a fallback model ----------
 USER = {'max_tokens': 500, 'stop': ['#'], 'extra_body': {'provider': {'allow_fallbacks': True, 'ignore': ['Alibaba'], 'data_collection': 'deny'}, 'reasoning': {'enabled': False}}}

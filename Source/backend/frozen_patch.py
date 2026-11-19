@@ -243,11 +243,18 @@ def build_pyz(
 ) -> bytes:
     if len(python_magic) != 4:
         raise ValueError("Python bytecode magic must be four bytes")
+    return _pack_pyz(
+        ((name, kind, zlib.compress(marshalled)) for name, (kind, marshalled) in modules.items()),
+        python_magic=python_magic,
+    )
+
+
+def _pack_pyz(items: Iterable[tuple[str, int, bytes]], *, python_magic: bytes) -> bytes:
+    """Lays out (name, kind, compressed blob) items in order after the PYZ header, with the TOC at the end."""
     chunks: list[bytes] = []
     toc: dict[str, tuple[int, int, int]] = {}
     position = 12
-    for name, (kind, marshalled) in modules.items():
-        blob = zlib.compress(marshalled)
+    for name, kind, blob in items:
         chunks.append(blob)
         toc[name] = (kind, position, len(blob))
         position += len(blob)
@@ -287,31 +294,20 @@ def patch_pyz(
             "refusing to replace existing modules without fingerprints: " + ", ".join(missing_gates)
         )
 
-    chunks: list[bytes] = []
-    toc: dict[str, tuple[int, int, int]] = {}
-    position = 12
-    for name, (kind, _old_position, _old_size) in archive.toc.items():
-        if name in replacements:
-            blob = zlib.compress(marshal.dumps(replacements[name]))
-        else:
-            blob = archive.raw_blobs[name]
-        chunks.append(blob)
-        toc[name] = (kind, position, len(blob))
-        position += len(blob)
-    for name, code in replacements.items():
-        if name in toc:
-            continue
-        blob = zlib.compress(marshal.dumps(code))
-        chunks.append(blob)
-        toc[name] = (0, position, len(blob))
-        position += len(blob)
-    for name, (kind, code) in additions.items():
-        blob = zlib.compress(marshal.dumps(code))
-        chunks.append(blob)
-        toc[name] = (kind, position, len(blob))
-        position += len(blob)
+    def items():
+        """Existing modules in archive order (replaced ones recompiled), then new replacements, then additions."""
+        for name, (kind, _old_position, _old_size) in archive.toc.items():
+            if name in replacements:
+                yield name, kind, zlib.compress(marshal.dumps(replacements[name]))
+            else:
+                yield name, kind, archive.raw_blobs[name]
+        for name, code in replacements.items():
+            if name not in archive.toc:
+                yield name, PYZ_ITEM_MODULE, zlib.compress(marshal.dumps(code))
+        for name, (kind, code) in additions.items():
+            yield name, kind, zlib.compress(marshal.dumps(code))
 
-    return PYZ_HEADER + archive.python_magic + struct.pack("!i", position) + b"".join(chunks) + marshal.dumps(toc)
+    return _pack_pyz(items(), python_magic=archive.python_magic)
 
 
 def _rebuild_carchive(archive: CArchive, replacement_pyz: bytes) -> bytes:

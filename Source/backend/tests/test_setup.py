@@ -199,5 +199,52 @@ with tempfile.TemporaryDirectory() as tmp:
               'already a Direct AI Connect build' in str(e) and 'Unsupported' not in str(e), str(e))
     check('...nothing written', not (tmp / 'out').exists())
 
+# test_build_steps: the checks build() runs, one by one
+def refused(fn, *args, **kwargs):
+    try:
+        fn(*args, **kwargs)
+    except ValueError as e:
+        return str(e)
+    return None
+
+check('python 3.12 refused', 'Use Python 3.11' in (refused(S.check_python_version, (3, 12, 1)) or ''))
+check('python 3.11.8 refused, names the version', 'Python 3.11.8 is too old' in (refused(S.check_python_version, (3, 11, 8)) or ''))
+check('python 3.11.9 and newer 3.11 accepted', refused(S.check_python_version, (3, 11, 9)) is None and refused(S.check_python_version, (3, 11, 16)) is None)
+step_contract = {'bases': {'a' * 64: {'name': 'Mantella 0.14', 'patched_sha256': 'b' * 64}}}
+check('stock base accepted', refused(S.check_base, 'a' * 64, step_contract, 'x.exe') is None)
+check('patched base named as a build', 'already a Direct AI Connect build' in (refused(S.check_base, 'b' * 64, step_contract, 'x.exe') or ''))
+check('unknown base unsupported', 'Unsupported' in (refused(S.check_base, 'c' * 64, step_contract, 'x.exe') or ''))
+
+sys.path.insert(0, str(BACKEND))
+from frozen_patch import sha256 as _sha256, build_pyz, parse_pyz, PYZ_ITEM_MODULE, PYZ_ITEM_PKG, MAGIC
+with tempfile.TemporaryDirectory() as tmp:
+    tmp = Path(tmp)
+    (tmp / 'Source/backend/src').mkdir(parents=True)
+    (tmp / 'Source/backend/src/mod.py').write_bytes(b'VALUE = 1\n')
+    good = {'modules': {'src.mod': _sha256(b'VALUE = 1\n')}}
+    hashes = {}
+    compiled = S.compile_checked(tmp, {'src.mod': 'src/mod.py'}, good, hashes, False)
+    namespace = {}
+    exec(compiled['src.mod'], namespace)
+    check('matching source compiled and hashed', namespace.get('VALUE') == 1 and hashes == good['modules'], hashes)
+    check('modified source refused', refused(S.compile_checked, tmp, {'src.mod': 'src/mod.py'}, {'modules': {'src.mod': '0' * 64}}, {}, False)
+          == 'Modified source file: src/mod.py')
+    check('module missing from the contract refused, not a KeyError',
+          refused(S.compile_checked, tmp, {'src.mod': 'src/mod.py'}, {'modules': {}}, {}, False) == 'Modified source file: src/mod.py')
+    hashes = {}
+    S.compile_checked(tmp, {'src.mod': 'src/mod.py'}, {'modules': {}}, hashes, True)
+    check('writing the contract records the hash instead of checking it', hashes == good['modules'])
+
+# test_build_pyz: modules packed in order, read back by parse_pyz
+import marshal as _marshal
+packed = parse_pyz(build_pyz({'a': (PYZ_ITEM_MODULE, _marshal.dumps(compile('X = 2', 'a', 'exec'))),
+                              'pkg': (PYZ_ITEM_PKG, _marshal.dumps(compile('', 'pkg', 'exec')))}, python_magic=MAGIC))
+namespace = {}
+exec(packed.code('a'), namespace)
+check('build_pyz: order, kinds and code kept', list(packed.toc) == ['a', 'pkg'] and packed.toc['pkg'][0] == PYZ_ITEM_PKG
+      and namespace.get('X') == 2, packed.toc)
+check('build_pyz: empty archive is valid', parse_pyz(build_pyz({}, python_magic=MAGIC)).toc == {})
+check('build_pyz: 3-byte magic refused', refused(build_pyz, {}, python_magic=b'abc') == 'Python bytecode magic must be four bytes')
+
 print('RESULT:' + ('ALL PASS' if not FAILS else f'{len(FAILS)} FAILED: {FAILS}'))
 sys.exit(1 if FAILS else 0)
