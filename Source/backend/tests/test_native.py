@@ -300,6 +300,57 @@ check('reply cost at Sonnet 5.5 prices', abs(native.reply_cost('claude-sonnet-5-
 check('dated model id priced like its family', native.reply_cost('claude-sonnet-5-5-20260601', usage) == native.reply_cost('claude-sonnet-5-5', usage))
 check('longest prefix wins', native.reply_cost('claude-sonnet-5-5', usage) != native.reply_cost('claude-sonnet-5', usage))
 check('unknown model has no cost', native.reply_cost('some-other-model', usage) is None)
+check('by_model_prefix: longest key, default, empty model', native.by_model_prefix({'a': 1, 'ab': 2}, 'abc') == 2
+      and native.by_model_prefix({'a': 1}, 'b', 7) == 7 and native.by_model_prefix({'a': 1}, None) is None)
+
+# stream events, one handler per event type
+st = native.StreamState()
+said = [st.handle(e) for e in [
+    {'type': 'ping'},
+    {'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'thinking', 'thinking': '', 'signature': ''}},
+    {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'thinking_delta', 'thinking': 'Hm'}},
+    {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'thinking_delta', 'thinking': 'm.'}},
+    {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'signature_delta', 'signature': 'sig'}},
+    {'type': 'content_block_stop', 'index': 0},
+    {'type': 'content_block_start', 'index': 1, 'content_block': {'type': 'text', 'text': ''}},
+    {'type': 'content_block_delta', 'index': 1, 'delta': {'type': 'text_delta', 'text': 'Hello.'}},
+    {'type': 'content_block_delta', 'index': 1, 'delta': {'type': 'text_delta', 'text': ''}},
+    {'type': 'content_block_stop', 'index': 1},
+    {'type': 'content_block_start', 'index': 2, 'content_block': {'type': 'tool_use', 'id': 't1', 'name': 'Follow'}},
+    {'type': 'content_block_delta', 'index': 2, 'delta': {'type': 'input_json_delta', 'partial_json': '{"a":'}},
+    {'type': 'content_block_delta', 'index': 2, 'delta': {'type': 'input_json_delta', 'partial_json': '1}'}},
+    {'type': 'content_block_delta', 'index': 9, 'delta': {'type': 'input_json_delta', 'partial_json': 'lost'}},
+    {'type': 'content_block_delta', 'index': 2, 'delta': {'type': 'unknown_delta', 'x': 1}},
+    {'type': 'content_block_stop', 'index': 2},
+    {'type': 'content_block_start', 'index': 3, 'content_block': {'type': 'redacted_thinking', 'data': 'r'}},
+    {'type': 'message_delta', 'delta': {'stop_reason': 'tool_use', 'stop_sequence': None}},
+]]
+check('events: only text is returned, empty text is not', [s for s in said if s is not None] == ['Hello.'] and st.got_text, said)
+check('events: thinking and signature assembled, redacted kept', st.thinking == [
+    {'type': 'thinking', 'thinking': 'Hmm.', 'signature': 'sig'}, {'type': 'redacted_thinking', 'data': 'r'}], st.thinking)
+check('events: tool call assembled, delta for an unknown block ignored', st.tool_calls == [
+    {'id': 't1', 'type': 'function', 'function': {'name': 'Follow', 'arguments': '{"a":1}'}}], st.tool_calls)
+check('events: stop reason kept, no usage without message_start', st.stop_reason == 'tool_use' and st.usage is None)
+st.handle({'type': 'content_block_start', 'index': 4, 'content_block': {'type': 'fallback', 'to': {'model': 'claude-x'}}})
+check('events: a fallback drops the declined attempt', st.fell_back_to == 'claude-x' and not st.tool_calls and not st.thinking and not st.blocks)
+st2 = native.StreamState()
+st2.handle({'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'tool_use', 'id': 't2', 'name': 'Wait'}})
+st2.handle({'type': 'content_block_stop', 'index': 0})
+check('events: a tool call without arguments gets {}', st2.tool_calls[0]['function']['arguments'] == '{}', st2.tool_calls)
+
+# message conversion helpers
+system, conv = native.convert_messages([
+    {'role': 'system', 'content': [{'type': 'text', 'text': 'A'}, 'skipped', {'type': 'text', 'text': 'B'}]},
+    {'role': 'developer', 'content': ''},
+    {'role': 'assistant', 'content': '  ', 'tool_calls': [{'id': 'c1', 'function': {'name': 'F', 'arguments': 'not json'}},
+                                                          {'id': 'c2', 'function': {'name': 'G', 'arguments': '[1]'}}]},
+    {'role': 'tool', 'tool_call_id': 'c1', 'content': ''},
+], {})
+check('convert: system parts joined, empty system dropped', system == [{'type': 'text', 'text': 'A\nB'}], system)
+check('convert: bad or non-object arguments become {}, blank text dropped',
+      [b.get('input') for b in conv[1]['content']] == [{}, {}] and all(b['type'] == 'tool_use' for b in conv[1]['content']), conv)
+check('convert: empty tool result reads done, user turn opened with "..."',
+      conv[2]['content'] == [{'type': 'tool_result', 'tool_use_id': 'c1', 'content': 'done'}] and conv[0]['content'][0]['text'] == '...', conv)
 check('no history cache when off', all('cache_control' not in b for m in native.build_request('claude-haiku-5-5', turn_n, None, None, {}, cache=False)['messages'] for b in m['content']))
 
 # ---------- fake server ----------

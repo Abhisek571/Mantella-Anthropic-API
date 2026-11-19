@@ -9,7 +9,8 @@ import asyncio
 import re
 import copy
 import inspect
-from typing import Any, AsyncIterable, AsyncGenerator, Awaitable
+import time
+from typing import Any, AsyncIterable, AsyncGenerator, Awaitable, Callable
 
 import src.utils as utils
 
@@ -55,29 +56,50 @@ def split_settings(llm_params: dict[str, Any] | None) -> tuple[dict[str, Any] | 
     if not isinstance(raw, dict):
         logger.warning('LLM Parameters: "reliability" should be a {...} block; using its defaults')
         return params, settings
+    settings['stall_rescue'] = _stall_rescue(raw)
+    settings['stall_seconds'] = _stall_seconds(raw)
+    settings['fallback_models'] = _fallback_models(raw)
+    settings['openrouter_provider'] = _openrouter_provider(raw)
+    return params, settings
+
+
+def _stall_rescue(raw: dict[str, Any]) -> bool | None:
     if isinstance(raw.get('stall_rescue'), bool):
-        settings['stall_rescue'] = raw['stall_rescue']
-    elif 'stall_rescue' in raw:
+        return raw['stall_rescue']
+    if 'stall_rescue' in raw:
         logger.warning('LLM Parameters: reliability "stall_rescue" should be true or false; using its default')
+    return None
+
+
+def _stall_seconds(raw: dict[str, Any]) -> float:
     seconds = raw.get('stall_seconds', DEFAULT_STALL_SECONDS)
     if isinstance(seconds, (int, float)) and not isinstance(seconds, bool) and seconds > 0:
-        settings['stall_seconds'] = float(seconds)
-    else:
-        logger.warning(f'LLM Parameters: reliability "stall_seconds" should be above 0; using {DEFAULT_STALL_SECONDS:g}')
+        return float(seconds)
+    logger.warning(f'LLM Parameters: reliability "stall_seconds" should be above 0; using {DEFAULT_STALL_SECONDS:g}')
+    return DEFAULT_STALL_SECONDS
+
+
+def _fallback_models(raw: dict[str, Any]) -> list[dict[str, str | None]]:
+    """Each entry as {'service': name or None (the current one), 'model': id}; a bad entry is logged and left out."""
     models = raw.get('fallback_models', [])
+    checked = []
     for entry in models if isinstance(models, list) else [models]:
         if isinstance(entry, str) and entry.strip():
-            settings['fallback_models'].append({'service': None, 'model': entry.strip()})
+            checked.append({'service': None, 'model': entry.strip()})
         elif isinstance(entry, dict) and isinstance(entry.get('model'), str) and entry['model'].strip() \
                 and isinstance(entry.get('service', ''), str):
-            settings['fallback_models'].append({'service': entry.get('service', '').strip() or None, 'model': entry['model'].strip()})
+            checked.append({'service': entry.get('service', '').strip() or None, 'model': entry['model'].strip()})
         else:
             logger.warning(f'LLM Parameters: reliability fallback entry {entry!r} ignored: use "model" or {{"service": "...", "model": "..."}}')
+    return checked
+
+
+def _openrouter_provider(raw: dict[str, Any]) -> dict[str, Any] | None:
     if isinstance(raw.get('openrouter_provider'), dict):
-        settings['openrouter_provider'] = raw['openrouter_provider']
-    elif 'openrouter_provider' in raw:
+        return raw['openrouter_provider']
+    if 'openrouter_provider' in raw:
         logger.warning('LLM Parameters: reliability "openrouter_provider" should be a {...} block; it was ignored')
-    return params, settings
+    return None
 
 
 def stall_limit(settings: dict[str, Any], is_local: bool) -> float:
@@ -222,6 +244,25 @@ def is_outage(error: Any) -> bool:
     if code is None or code < 400:
         code = _status_code(getattr(error, 'status_code', None))
     return code is not None and (code in (408, 429) or code >= 500)
+
+
+HTTP_ATTEMPTS = 3
+HTTP_FIRST_DELAY = 1.0  # seconds before the second try; each later wait is twice the one before
+
+
+def get_with_retry(get: Callable[..., Any], url: str, *, attempts: int = HTTP_ATTEMPTS, first_delay: float = HTTP_FIRST_DELAY,
+                   sleep: Callable[[float], None] | None = None, **kwargs: Any) -> Any:
+    """get(url, **kwargs) (requests.get or the like), asked again after a growing wait while the answer is a rate limit
+    or a server error (is_outage). Returns the last response; an exception from get is raised as it is. sleep: the
+    wait (time.sleep when None)."""
+    delay = first_delay
+    for attempt in range(1, attempts + 1):
+        response = get(url, **kwargs)
+        if attempt == attempts or not is_outage(response):
+            return response
+        logger.debug(f"{url} answered {getattr(response, 'status_code', '?')}; trying again in {delay:g} seconds ({attempt}/{attempts - 1})")
+        (sleep or time.sleep)(delay)
+        delay *= 2
 
 
 def empty_reply_kind(attempt: Attempt) -> str:

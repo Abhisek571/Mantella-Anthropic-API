@@ -2,12 +2,12 @@
   "bases": {
     "b103fb5cbdfd9b3cb7bb1c157ad67bca1a1d8fcd554e76f2bd0ca5947d0757b1": {
       "name": "Mantella 0.14",
-      "patched_sha256": "101b811f0289fadc915628ecfd1901b45c09566030a65e4b11f30240a616c9a3"
+      "patched_sha256": "19f8c543953ba26e090d39313a5e0bd0b99aa3b64f2e535c32a6233d804621a1"
     }
   },
   "modules": {
     "src.utils": "109f6684a4e4293fccf8bc15844aaaf8e6021411d02fbdfcbb4327a08e38a46e",
-    "src.llm.client_base": "db4a7646c1dc6abb9e794ae6317246a36e120b09784db268b8e8afc6ad3ae575",
+    "src.llm.client_base": "6cb504518de9a47d86d13d39eb91aa1538c24f4e542ccaaa5d8720356753fda8",
     "src.config.definitions.llm_definitions": "11d34ff14c606650b20ae9d5cb509735a1a7441b224314a84ece850730131d8b",
     "src.config.mantella_config_value_definitions_new": "5ff4b2311660e58372e7314d4dc33eb8994f4570a9fa987fe63e31cc0d674cce",
     "src.config.definitions.vision_definitions": "b06b8d46d3ae19a7ec9d10963f758e2ec96ee6d7b911b8050e98f03b68866c12",
@@ -20,8 +20,8 @@
     "src.conversation.conversation": "035b0474c875f69791ed0bc6de283dbc8fd7869d6572c6734db5a1d9492d5d23",
     "src.game_manager": "271c87fa41386de02fe86b23b5287657bf90351526c6823f9a541d77263a8f45",
     "src.http.communication_constants": "885b58b4836b4c24ae709cf3da44de247ccefa1006aa6f319d9497d371416d13",
-    "src.llm.anthropic_native": "43816873b06b11c0f77a809c1eb6ea4efe63a937bbb547d2d7fae776fa529db8",
-    "src.llm.reliability": "eea785f384ad9a126fd84b335f8d898b8d9bb370e8266bbc1c2207a87e866aa6",
+    "src.llm.anthropic_native": "75d62f6297aa55ab1fb1c8b44cae35747ed3f4eaa5069854203503fc1509fe40",
+    "src.llm.reliability": "e7807858709263d503e451e200ad21d365e3a7669692ed7be8346e96fe53e15e",
     "src.extensions": "cc7e433856d4149149cbce72dccf221ee876f2f0a3d15de3b6146fa55b4ac8a9",
     "src.dual_input": "9bafc1b0490b4a29f1779976c4a50e43e70b44ac1c4d6fb7436501a381b3ad76"
   },

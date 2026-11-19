@@ -118,61 +118,81 @@ def check_written(output, data):
                          f'{len(data):,} bytes, or different content): {output}. ' + ANTIVIRUS_HINT)
 
 
-def build(base, output, root=ROOT, write_contract=False):
-    if sys.version_info[:2] != (3, 11):
+def check_python_version(version=None):
+    """Only Python 3.11.9 or a newer 3.11 compiles the patched code the way the contract expects."""
+    version = tuple(version or sys.version_info[:3])
+    if version[:2] != (3, 11):
         raise ValueError('Use Python 3.11 to match the Mantella runtime.')
     # 3.11.8 and older compile some of the patched code differently, so the built exe would not match the contract
-    if sys.version_info[:3] < (3, 11, 9):
+    if version < (3, 11, 9):
         raise ValueError('Python %d.%d.%d is too old: install Python 3.11.9 or newer from python.org '
                          '(https://www.python.org/downloads/release/python-3119/) and run Setup Backend.cmd again. '
-                         'Nothing changed.' % sys.version_info[:3])
-    base, output, root = Path(base).resolve(), Path(output).resolve(), Path(root).resolve()
-    if base == output or (output.exists() and base.samefile(output)):
-        raise ValueError('Refusing to replace the input Mantella executable.')
-    sys.path.insert(0, str(root / 'Source/backend'))
-    from frozen_patch import compile_source, patch_executable, sha256, parse_carchive, parse_pyz, code_fingerprint
+                         'Nothing changed.' % version[:3])
 
-    contract = json.loads((root / 'Source/backend/build-contract.json').read_text(encoding='utf-8'))
-    raw = base.read_bytes()
-    base_hash = sha256(raw)
-    if not write_contract and any(b.get('patched_sha256') == base_hash for b in contract['bases'].values()):
+
+def check_base(base_hash, contract, base):
+    """The input must be a supported stock Mantella.exe, not a build of this patch."""
+    if any(b.get('patched_sha256') == base_hash for b in contract['bases'].values()):
         raise ValueError(f'{base} is already a Direct AI Connect build, not the original Mantella.exe. Point to the '
                          'Mantella.exe inside the Mantella mod itself (with Vortex: in its staging folder, not in Data). '
                          'Nothing changed.')
-    if not write_contract and base_hash not in contract['bases']:
+    if base_hash not in contract['bases']:
         raise ValueError('Unsupported Mantella executable. Supported: Mantella 0.14 (the Mantella.exe from the Mantella mod itself). Nothing changed.')
 
-    replacements, module_hashes = {}, {}
-    for name, relative in MODULES.items():
+
+def compile_checked(root, modules, contract, module_hashes, write_contract):
+    """Compiles each {module name: relative path} of this patch, recording its SHA-256 in module_hashes. Unless the
+    contract is being written, a source that differs from the contract stops the build."""
+    from frozen_patch import compile_source, sha256
+    compiled = {}
+    for name, relative in modules.items():
         source = (root / 'Source/backend' / relative).read_bytes()
         module_hashes[name] = sha256(source)
-        if not write_contract and contract['modules'][name] != module_hashes[name]:
+        if not write_contract and contract['modules'].get(name) != module_hashes[name]:
             raise ValueError('Modified source file: ' + relative)
-        replacements[name] = compile_source(source, relative)
+        compiled[name] = compile_source(source, relative)
+    return compiled
 
-    # each replaced module must still be the stock Mantella v0.14 code in the input executable
-    pyz = parse_pyz(parse_carchive(raw).entry_data('PYZ.pyz'))
-    upstream_gates = {}
+
+def upstream_fingerprints(root, pyz):
+    """{module name: fingerprint} of the stock code each replaced module must still have in the input executable."""
+    from frozen_patch import compile_source, code_fingerprint
+    gates = {}
     for name, relative in MODULES.items():
-        upstream = (root / 'Source/upstream' / relative).read_bytes()
-        upstream_code = compile_source(upstream, relative)
+        upstream_code = compile_source((root / 'Source/upstream' / relative).read_bytes(), relative)
         expected = code_fingerprint(upstream_code)
         if code_fingerprint(pyz.code(name)) != expected:
             if name not in JUMP_TOLERANT or not same_code_ignoring_jumps(pyz.code(name), upstream_code):
                 raise ValueError(f'{name} in the input executable is not stock Mantella v0.14. Nothing changed.')
             expected = code_fingerprint(pyz.code(name))
-        upstream_gates[name] = expected
+        gates[name] = expected
+    return gates
+
+
+def build(base, output, root=ROOT, write_contract=False):
+    check_python_version()
+    base, output, root = Path(base).resolve(), Path(output).resolve(), Path(root).resolve()
+    if base == output or (output.exists() and base.samefile(output)):
+        raise ValueError('Refusing to replace the input Mantella executable.')
+    sys.path.insert(0, str(root / 'Source/backend'))
+    from frozen_patch import patch_executable, sha256, parse_carchive, parse_pyz, PYZ_ITEM_MODULE
+
+    contract = json.loads((root / 'Source/backend/build-contract.json').read_text(encoding='utf-8'))
+    raw = base.read_bytes()
+    base_hash = sha256(raw)
+    if not write_contract:
+        check_base(base_hash, contract, base)
+
+    module_hashes = {}
+    replacements = compile_checked(root, MODULES, contract, module_hashes, write_contract)
+    # each replaced module must still be the stock Mantella v0.14 code in the input executable
+    upstream_gates = upstream_fingerprints(root, parse_pyz(parse_carchive(raw).entry_data('PYZ.pyz')))
 
     additions, vendor_hash = vendor_modules(root)
     if not write_contract and contract.get('vendor') != vendor_hash:
         raise ValueError('Modified vendored package files in ' + VENDOR)
-    from frozen_patch import PYZ_ITEM_MODULE
-    for name, relative in NEW_MODULES.items():
-        source = (root / 'Source/backend' / relative).read_bytes()
-        module_hashes[name] = sha256(source)
-        if not write_contract and contract['modules'].get(name) != module_hashes[name]:
-            raise ValueError('Modified source file: ' + relative)
-        additions[name] = (PYZ_ITEM_MODULE, compile_source(source, relative))
+    for name, code in compile_checked(root, NEW_MODULES, contract, module_hashes, write_contract).items():
+        additions[name] = (PYZ_ITEM_MODULE, code)
 
     data, report = patch_executable(raw, replacements=replacements, expected_exe_sha256=base_hash,
                                     expected_module_fingerprints=upstream_gates, additions=additions)

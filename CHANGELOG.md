@@ -2,6 +2,13 @@
 
 Every change to Mantella - Direct AI Connect. The Nexus page lists only the main changes for each version.
 
+## Unreleased
+
+### Changed
+- Code cleanup: long functions split into smaller steps, shared helpers, more offline tests. No change in what is sent to the model or shown in game.
+- The model list request now tries again with a growing wait on a rate limit (429) or a server error (5xx).
+- The patched Mantella exe built from this source has not been tested in game yet.
+
 ## 1.5.0 (2026-11-18)
 
 ### New
